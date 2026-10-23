@@ -40,6 +40,20 @@ function openaiClient(provider: Exclude<Provider, "anthropic">) {
   return client;
 }
 
+// Lists the model IDs a provider's key can use, so seats can pick a real one
+// instead of a guessed name.
+export async function listModels(provider: Provider): Promise<string[]> {
+  if (isMock()) return [];
+  if (provider === "anthropic") {
+    const ids: string[] = [];
+    for await (const model of anthropicClient().models.list()) ids.push(model.id);
+    return ids;
+  }
+  const ids: string[] = [];
+  for await (const model of openaiClient(provider).models.list()) ids.push(model.id.replace(/^models\//, ""));
+  return ids.sort();
+}
+
 // Models that accept Anthropic's server-side refusal fallback.
 const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]);
 

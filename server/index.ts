@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { createHmac, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { db, migrate } from "./db.js";
-import { isMock, PROVIDERS, type Provider } from "./providers.js";
+import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
 import { addSeat, listSeats, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
 import { addMemory, deleteMemory, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
 import { runTurn, type TeamEvent } from "./team.js";
@@ -107,6 +107,23 @@ app.post("/api/turn", async (req, res) => {
   } finally {
     clearInterval(keepAlive);
     res.end();
+  }
+});
+
+app.get("/api/models/:provider", async (req, res) => {
+  const provider = req.params.provider as Provider;
+  if (!PROVIDERS.includes(provider)) {
+    res.status(400).json({ error: "Unknown provider." });
+    return;
+  }
+  if (!isProviderReady(provider)) {
+    res.json({ models: [], error: "No API key for this provider yet." });
+    return;
+  }
+  try {
+    res.json({ models: await listModels(provider) });
+  } catch (err) {
+    res.json({ models: [], error: err instanceof Error ? err.message : String(err) });
   }
 });
 

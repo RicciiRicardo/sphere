@@ -198,7 +198,8 @@ export async function runTurn(text: string, emit: Emit, mode: "auto" | "briefing
         await record(turnId, seat.id, "seat", reply);
         emit({ type: "seat", seatId: seat.id, text: reply });
       } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
+        let error = err instanceof Error ? err.message : String(err);
+        if ((err as { status?: number }).status === 404) error += " Pick a model from the list in this seat's settings.";
         console.error(`${seat.name} failed`, err);
         await record(turnId, seat.id, "error", error);
         emit({ type: "seat_error", seatId: seat.id, error: `${seat.name} couldn't answer: ${error}` });
