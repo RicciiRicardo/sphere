@@ -29,6 +29,7 @@ const SEAT_COLORS: Record<string, string> = {
   perplexity: "#20b8a6",
   grok: "#a0a4ad",
   chatgpt: "#10a37f",
+  gemini: "#8e75ff",
 };
 const FALLBACK_COLORS = ["#c678dd", "#e5a03c", "#e06c75", "#56b6c2"];
 const colorFor = (id: string, i = 0) => SEAT_COLORS[id] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length];
@@ -48,6 +49,7 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   xai: "xAI",
   meta: "Meta",
   perplexity: "Perplexity",
+  google: "Google",
 };
 
 function turnsFromMessages(messages: StoredMessage[]): Turn[] {

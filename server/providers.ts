@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
-export type Provider = "anthropic" | "openai" | "xai" | "meta" | "perplexity";
+export type Provider = "anthropic" | "openai" | "xai" | "meta" | "perplexity" | "google";
 
 // Every non-Anthropic provider speaks the OpenAI Chat Completions format, so
 // one client type covers them with a different base URL and key.
@@ -10,9 +10,10 @@ const OPENAI_COMPATIBLE: Record<Exclude<Provider, "anthropic">, { baseURL?: stri
   xai: { baseURL: "https://api.x.ai/v1", env: "XAI_API_KEY" },
   meta: { baseURL: "https://api.meta.ai/v1", env: "META_API_KEY" },
   perplexity: { baseURL: "https://api.perplexity.ai", env: "PERPLEXITY_API_KEY" },
+  google: { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/", env: "GEMINI_API_KEY" },
 };
 
-export const PROVIDERS: Provider[] = ["anthropic", "openai", "xai", "meta", "perplexity"];
+export const PROVIDERS: Provider[] = ["anthropic", "openai", "xai", "meta", "perplexity", "google"];
 
 export const isMock = () => process.env.SPHERE_MOCK === "1";
 
@@ -104,6 +105,7 @@ function mockReply(speaker: string, prompt: string): Promise<string> {
     Muse: `A second view: I'd sequence this differently and protect time for the investor call first. (Mock reply)`,
     Perplexity: `I checked three sources; the numbers line up. (Mock reply)\n\nSources:\n[1] https://example.com/source`,
     Grok: `Nothing breaking on X that changes this today. (Mock reply)`,
+    Gemini: `I read through the material: the key numbers hold, but the timeline on page 3 is tight. (Mock reply)`,
     ChatGPT: `Two holes in the plan: no owner for follow-up, and no date on the proposal. (Mock reply)`,
   };
   const text = replies[speaker] ?? `(${speaker} mock reply)`;

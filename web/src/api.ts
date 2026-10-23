@@ -1,4 +1,4 @@
-export type Provider = "anthropic" | "openai" | "xai" | "meta" | "perplexity";
+export type Provider = "anthropic" | "openai" | "xai" | "meta" | "perplexity" | "google";
 
 export interface Seat {
   id: string;
