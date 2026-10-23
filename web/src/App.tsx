@@ -29,6 +29,7 @@ const SEAT_COLORS: Record<string, string> = {
   perplexity: "#20b8a6",
   grok: "#a0a4ad",
   chatgpt: "#10a37f",
+  gemini: "#8e75ff",
 };
 const FALLBACK_COLORS = ["#c678dd", "#e5a03c", "#e06c75", "#56b6c2"];
 const colorFor = (id: string, i = 0) => SEAT_COLORS[id] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length];
@@ -48,6 +49,7 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   xai: "xAI",
   meta: "Meta",
   perplexity: "Perplexity",
+  google: "Google",
 };
 
 function turnsFromMessages(messages: StoredMessage[]): Turn[] {
@@ -533,6 +535,27 @@ function SeatEditor({
     enabled: seat?.enabled ?? true,
   });
   const [err, setErr] = useState("");
+  const [models, setModels] = useState<{ list: string[]; note: string }>({ list: [], note: "" });
+  useEffect(() => {
+    let live = true;
+    setModels({ list: [], note: "Loading available models…" });
+    api
+      .models(form.provider)
+      .then((r) => {
+        if (!live) return;
+        const note = r.error
+          ? `Couldn't list models: ${r.error}`
+          : r.models.length
+            ? `${r.models.length} models available on this key. Start typing to see them.`
+            : "";
+        setModels({ list: r.models, note });
+      })
+      .catch(() => live && setModels({ list: [], note: "" }));
+    return () => {
+      live = false;
+    };
+  }, [form.provider]);
+  const modelMissing = models.list.length > 0 && form.model && !models.list.includes(form.model);
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   const run = async (fn: () => Promise<{ seats: Seat[] }>) => {
@@ -570,7 +593,14 @@ function SeatEditor({
         </label>
         <label>
           Model ID
-          <input value={form.model} onChange={(e) => set("model", e.target.value)} placeholder="e.g. claude-opus-5-5" />
+          <input list="model-options" value={form.model} onChange={(e) => set("model", e.target.value)} placeholder="e.g. claude-opus-5-5" />
+          <datalist id="model-options">
+            {models.list.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          {modelMissing && <span className="error">This key doesn't list "{form.model}". Pick one from the list.</span>}
+          {models.note && <span className="muted">{models.note}</span>}
         </label>
         <label>
           Role card

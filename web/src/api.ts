@@ -1,4 +1,4 @@
-export type Provider = "anthropic" | "openai" | "xai" | "meta" | "perplexity";
+export type Provider = "anthropic" | "openai" | "xai" | "meta" | "perplexity" | "google";
 
 export interface Seat {
   id: string;
@@ -72,6 +72,7 @@ export const api = {
   setChair: (id: string) => call<{ seats: Seat[] }>(`/api/seats/${id}/chair`, { method: "POST" }),
   addSeat: (seat: Pick<Seat, "name" | "title" | "provider" | "model" | "role_card">) =>
     call<{ seats: Seat[] }>("/api/seats", { method: "POST", body: JSON.stringify(seat) }),
+  models: (provider: Provider) => call<{ models: string[]; error?: string }>(`/api/models/${provider}`),
   removeSeat: (id: string) => call<{ seats: Seat[] }>(`/api/seats/${id}`, { method: "DELETE" }),
   addMemory: (kind: string, content: string) =>
     call<{ memory: MemoryItem[] }>("/api/memory", { method: "POST", body: JSON.stringify({ kind, content }) }),

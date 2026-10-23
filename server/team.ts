@@ -75,7 +75,7 @@ async function route(text: string, seats: SeatView[], transcript: string): Promi
         max_tokens: 2000,
         output_config: { format: zodOutputFormat(Routing), effort: "low" },
         system:
-          "You route messages on Ricardo's AI team. The chair always answers; you decide which OTHER seats should contribute first. Pick only seats whose role clearly adds something: usually zero to two. Small talk, simple questions and follow-ups the chair can handle need none. Facts, prices, companies or regulations need the researcher. Anything happening right now needs the pulse seat. Requests for ideas, critique or a second opinion need the generalist or the Muse seat. Return seat ids from the roster only, and a reason of at most 15 words.",
+          "You route messages on Ricardo's AI team. The chair always answers; you decide which OTHER seats should contribute first. Pick only seats whose role clearly adds something: usually zero to two. Small talk, simple questions and follow-ups the chair can handle need none. Facts, prices, companies or regulations need the researcher. Anything happening right now needs the pulse seat. Requests for ideas, critique or a second opinion need the generalist or the Muse seat. Long documents, reports, spreadsheets or detailed analysis need the analyst. Return seat ids from the roster only, and a reason of at most 15 words.",
         messages: [
           {
             role: "user",
@@ -105,6 +105,7 @@ function keywordRoute(text: string, candidates: SeatView[]) {
   if (/\b(idea|ideas|brainstorm|poke holes|critique|second opinion|challenge)\b/.test(t) && has("chatgpt"))
     picks.push("chatgpt");
   if (/\b(plan|priorit|strategy)/.test(t) && has("muse")) picks.push("muse");
+  if (/\b(document|report|spreadsheet|contract|analy[sz]|summari[sz]e|numbers)/.test(t) && has("gemini")) picks.push("gemini");
   return { seats: picks.slice(0, 3), reason: picks.length ? "Matched by topic keywords." : "The chair can handle this alone." };
 }
 
@@ -197,7 +198,8 @@ export async function runTurn(text: string, emit: Emit, mode: "auto" | "briefing
         await record(turnId, seat.id, "seat", reply);
         emit({ type: "seat", seatId: seat.id, text: reply });
       } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
+        let error = err instanceof Error ? err.message : String(err);
+        if ((err as { status?: number }).status === 404) error += " Pick a model from the list in this seat's settings.";
         console.error(`${seat.name} failed`, err);
         await record(turnId, seat.id, "error", error);
         emit({ type: "seat_error", seatId: seat.id, error: `${seat.name} couldn't answer: ${error}` });

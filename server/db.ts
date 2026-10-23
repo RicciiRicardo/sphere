@@ -66,6 +66,11 @@ export async function migrate() {
     );
     CREATE INDEX IF NOT EXISTS messages_created_idx ON messages (created_at);
 
+    CREATE TABLE IF NOT EXISTS applied_seeds (
+      key TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS memory (
       id SERIAL PRIMARY KEY,
       kind TEXT NOT NULL,

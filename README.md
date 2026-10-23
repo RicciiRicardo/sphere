@@ -1,6 +1,6 @@
 # Sphere
 
-Sphere by MI Group: talk to a team of AI models (Claude, Muse, Perplexity, Grok, ChatGPT) in one place, by voice or text, working from one shared context.
+Sphere by MI Group: talk to a team of AI models (Claude, Muse, Perplexity, Grok, ChatGPT, Gemini) in one place, by voice or text, working from one shared context.
 
 Phase 1 of the [Sphere concept](https://claude.ai/artifact/WivxvxcFcNA8GFqFLiS2cK):
 
@@ -38,5 +38,6 @@ Open http://localhost:5180. `SPHERE_MOCK=1` gives canned replies with no API cal
 | Perplexity | Perplexity | `PERPLEXITY_API_KEY` | `sonar-pro` |
 | Grok | xAI | `XAI_API_KEY` | `grok-4.7` |
 | ChatGPT | OpenAI | `OPENAI_API_KEY` | `gpt-6.1-sol` |
+| Gemini (Analyst) | Google AI Studio | `GEMINI_API_KEY` | `gemini-4-argon` |
 
 Model IDs are editable per seat in the app, so a new model release doesn't need a code change. Without an Anthropic key, routing falls back to keyword matching and memory isn't filled in automatically.

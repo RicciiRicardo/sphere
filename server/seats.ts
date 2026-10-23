@@ -80,17 +80,42 @@ const DEFAULT_SEATS: Seat[] = [
     is_chair: false,
     sort: 4,
   },
+  {
+    id: "gemini",
+    name: "Gemini",
+    title: "Analyst",
+    provider: "google",
+    model: "gemini-4-argon",
+    role_card:
+      "You dig into long material: documents, reports, spreadsheets, contracts and data. Pull out what matters, check the numbers, and flag anything that doesn't add up.",
+    enabled: true,
+    is_chair: false,
+    sort: 5,
+  },
 ];
+
+// Seats added to the lineup after launch. Each is inserted once, so a seat
+// Ricardo later removes stays removed.
+const LATER_SEATS: Record<string, string> = { "seat:gemini": "gemini" };
+
+async function insertSeat(s: Seat) {
+  await db.query(
+    `INSERT INTO seats (id, name, title, provider, model, role_card, enabled, is_chair, sort)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
+    [s.id, s.name, s.title, s.provider, s.model, s.role_card, s.enabled, s.is_chair, s.sort],
+  );
+}
 
 export async function seedSeats() {
   const { rows } = await db.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM seats");
-  if (rows[0].n > 0) return;
-  for (const s of DEFAULT_SEATS) {
-    await db.query(
-      `INSERT INTO seats (id, name, title, provider, model, role_card, enabled, is_chair, sort)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [s.id, s.name, s.title, s.provider, s.model, s.role_card, s.enabled, s.is_chair, s.sort],
-    );
+  const fresh = rows[0].n === 0;
+  if (fresh) for (const s of DEFAULT_SEATS) await insertSeat(s);
+  for (const [key, id] of Object.entries(LATER_SEATS)) {
+    const applied = await db.query("SELECT 1 FROM applied_seeds WHERE key = $1", [key]);
+    if (applied.rows.length) continue;
+    const seat = DEFAULT_SEATS.find((s) => s.id === id);
+    if (seat && !fresh) await insertSeat(seat);
+    await db.query("INSERT INTO applied_seeds (key) VALUES ($1) ON CONFLICT DO NOTHING", [key]);
   }
 }
 
