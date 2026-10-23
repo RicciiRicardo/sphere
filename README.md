@@ -35,7 +35,7 @@ Open http://localhost:5180. `SPHERE_MOCK=1` gives canned replies with no API cal
 | Claude (chair) | Anthropic | `ANTHROPIC_API_KEY` | `claude-opus-5-5` |
 | Coordinator and memory | Anthropic | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 | Muse | Meta Model API | `META_API_KEY` | `muse-spark-1.3` |
-| Perplexity | Perplexity | `PERPLEXITY_API_KEY` | `sonar-pro` |
+| Perplexity | Perplexity | `PERPLEXITY_API_KEY` | `fast` (an effort level; Perplexity picks the model) |
 | Grok | xAI | `XAI_API_KEY` | `grok-4.7` |
 | ChatGPT | OpenAI | `OPENAI_API_KEY` | `gpt-6.1-sol` |
 | Gemini (Analyst) | Google AI Studio | `GEMINI_API_KEY` | `gemini-4-argon` |
