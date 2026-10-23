@@ -97,6 +97,7 @@ export async function complete({ provider, model, system, prompt, speaker }: Com
   }
 
   if (provider === "perplexity") return perplexity(model, system, prompt);
+  if (provider === "meta") return metaResponses(model, system, prompt);
 
   const client = openaiClient(provider);
   const response = await client.chat.completions.create({
@@ -107,6 +108,19 @@ export async function complete({ provider, model, system, prompt, speaker }: Com
     ],
   });
   return response.choices[0]?.message?.content?.trim() ?? "";
+}
+
+// Meta's playground calls Muse through the Responses endpoint, and on our
+// account Chat Completions answers 404 "model not found" for the same model,
+// so Muse goes through Responses too.
+async function metaResponses(model: string, system: string, prompt: string): Promise<string> {
+  const response = await openaiClient("meta").responses.create({
+    model,
+    instructions: system,
+    input: prompt,
+    reasoning: { effort: "medium" },
+  });
+  return response.output_text?.trim() ?? "";
 }
 
 // Perplexity retired Sonar chat completions on Sept 27, 2026 for its Agent
