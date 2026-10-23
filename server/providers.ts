@@ -9,7 +9,7 @@ const OPENAI_COMPATIBLE: Record<Exclude<Provider, "anthropic">, { baseURL?: stri
   openai: { env: "OPENAI_API_KEY" },
   xai: { baseURL: "https://api.x.ai/v1", env: "XAI_API_KEY" },
   meta: { baseURL: "https://api.meta.ai/v1", env: "META_API_KEY" },
-  perplexity: { baseURL: "https://api.perplexity.ai", env: "PERPLEXITY_API_KEY" },
+  perplexity: { baseURL: "https://api.perplexity.ai/v1", env: "PERPLEXITY_API_KEY" },
   google: { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/", env: "GEMINI_API_KEY" },
 };
 
@@ -49,6 +49,7 @@ export async function listModels(provider: Provider): Promise<string[]> {
     for await (const model of anthropicClient().models.list()) ids.push(model.id);
     return ids;
   }
+  if (provider === "perplexity") return [...PERPLEXITY_EFFORTS];
   const ids: string[] = [];
   for await (const model of openaiClient(provider).models.list()) ids.push(model.id.replace(/^models\//, ""));
   return ids.sort();
@@ -95,6 +96,8 @@ export async function complete({ provider, model, system, prompt, speaker }: Com
       .trim();
   }
 
+  if (provider === "perplexity") return perplexity(model, system, prompt);
+
   const client = openaiClient(provider);
   const response = await client.chat.completions.create({
     model,
@@ -103,11 +106,40 @@ export async function complete({ provider, model, system, prompt, speaker }: Com
       { role: "user", content: prompt },
     ],
   });
-  let text = response.choices[0]?.message?.content?.trim() ?? "";
-  // Perplexity returns its sources beside the message rather than inside it.
-  const citations = (response as unknown as { citations?: string[] }).citations;
-  if (citations?.length) {
-    text += "\n\nSources:\n" + citations.map((url, i) => `[${i + 1}] ${url}`).join("\n");
+  return response.choices[0]?.message?.content?.trim() ?? "";
+}
+
+// Perplexity retired Sonar chat completions on Sept 27, 2026 for its Agent
+// API (the Responses format). A seat's "model" is either an effort level,
+// which picks Perplexity's own search setup, or a specific model ID, which
+// then needs web search switched on explicitly.
+export const PERPLEXITY_EFFORTS = ["fast", "low", "medium", "high"] as const;
+const LEGACY_SONAR: Record<string, string> = { sonar: "fast", "sonar-pro": "fast", "sonar-reasoning-pro": "low" };
+
+interface SearchResults {
+  type: "search_results";
+  results?: { id?: number | string; url?: string; title?: string }[];
+}
+
+async function perplexity(model: string, system: string, prompt: string): Promise<string> {
+  const choice = LEGACY_SONAR[model] ?? model;
+  const isEffort = (PERPLEXITY_EFFORTS as readonly string[]).includes(choice);
+  const body = {
+    instructions: system,
+    input: prompt,
+    ...(isEffort ? { effort: choice } : { model: choice, tools: [{ type: "web_search" }] }),
+  };
+  const response = await openaiClient("perplexity").responses.create(
+    body as unknown as Parameters<OpenAI["responses"]["create"]>[0],
+  );
+  let text = (response as { output_text?: string }).output_text?.trim() ?? "";
+  const output = (response as { output?: unknown[] }).output ?? [];
+  const sources = output
+    .filter((o): o is SearchResults => (o as { type?: string }).type === "search_results")
+    .flatMap((o) => o.results ?? [])
+    .filter((r) => r.url);
+  if (sources.length) {
+    text += "\n\nSources:\n" + sources.map((r) => `[${r.id ?? "?"}] ${r.title ? r.title + " - " : ""}${r.url}`).join("\n");
   }
   return text;
 }

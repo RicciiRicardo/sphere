@@ -49,7 +49,7 @@ const DEFAULT_SEATS: Seat[] = [
     name: "Perplexity",
     title: "Researcher",
     provider: "perplexity",
-    model: "sonar-pro",
+    model: "fast",
     role_card:
       "You look things up: facts, prices, companies, regulations, market data. Always cite where each fact came from. If you can't verify something, say so.",
     enabled: true,
