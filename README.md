@@ -9,6 +9,9 @@ Phase 1 of the [Sphere concept](https://claude.ai/artifact/WivxvxcFcNA8GFqFLiS2c
 - **Reassignable chair.** Claude chairs by default. Say "Muse, take the chair", or use Make chair in a seat's settings.
 - **Shared team memory (the context engine).** People, projects, commitments, decisions, preferences and notes. The team adds to it after each exchange; you can add, edit or remove anything in the memory panel.
 - **Voice.** Tap Talk to speak and the team's reply is read aloud, with a different voice per seat. This uses the browser's built-in speech (Chrome or Safari), so no voice provider is needed yet.
+- **Roundtable.** "Team, debate this" (or the Roundtable button): every seat gives an opening view, then responds to the others by name; the chair closes with where the team agrees, where it splits, and a recommendation.
+- **Pitch.** "Who wants this?" (or the Pitch button): every seat bids with a plan, why it fits, and a confidence score. Bids are weighed against each seat's track record, the winner does the task, and "Give it to…" hands it to another seat instead.
+- **Track record.** 👍/👎 on answers. Each seat's approval rate (smoothed, starting at 50%) shows in the team list and weighs its Pitch bids.
 - **Morning briefing.** Say "good morning" or tap the button.
 - **Pluggable seats.** Add a seat for any model whose provider is supported, edit role cards and model IDs, or bench a seat.
 

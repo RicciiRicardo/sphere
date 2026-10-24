@@ -68,7 +68,7 @@ export interface CompleteArgs {
 }
 
 export async function complete({ provider, model, system, prompt, speaker }: CompleteArgs): Promise<string> {
-  if (isMock()) return mockReply(speaker ?? provider, prompt);
+  if (isMock()) return mockReply(speaker ?? provider, prompt, system);
 
   if (provider === "anthropic") {
     const client = anthropicClient();
@@ -158,8 +158,16 @@ async function perplexity(model: string, system: string, prompt: string): Promis
   return text;
 }
 
-function mockReply(speaker: string, prompt: string): Promise<string> {
+function mockReply(speaker: string, prompt: string, system: string): Promise<string> {
   const ask = prompt.split("\n").filter(Boolean).at(-1)?.slice(0, 120) ?? "";
+  const wait = (text: string) => new Promise<string>((r) => setTimeout(() => r(text), 400 + Math.random() * 900));
+  if (system.includes("CONFIDENCE:")) {
+    const confidence = 40 + ((speaker.length * 17) % 55);
+    return wait(`PLAN: ${speaker} would break the task into steps and deliver a first draft today.\nWHY ME: It fits my role on the team.\nCONFIDENCE: ${confidence}`);
+  }
+  if (system.includes("round two")) {
+    return wait(`I agree with most of that, but I'd push back on the timeline: it's too tight. (${speaker}, mock response)`);
+  }
   const replies: Record<string, string> = {
     Claude: `Here's where I'd land, pulling the team together: start with the item that moves revenue this week, then the follow-ups. (Mock reply to: "${ask}")`,
     Muse: `A second view: I'd sequence this differently and protect time for the investor call first. (Mock reply)`,

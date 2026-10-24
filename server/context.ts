@@ -98,7 +98,7 @@ export async function recentTranscript(limit = 24): Promise<TranscriptLine[]> {
   const { rows } = await db.query<TranscriptLine>(
     `SELECT speaker, kind, content FROM (
        SELECT speaker, kind, content, id FROM messages
-       WHERE kind IN ('user', 'seat', 'briefing') ORDER BY id DESC LIMIT $1
+       WHERE kind IN ('user', 'seat', 'rebuttal', 'briefing') ORDER BY id DESC LIMIT $1
      ) t ORDER BY id`,
     [limit],
   );
@@ -110,7 +110,7 @@ export function formatTranscript(lines: TranscriptLine[], names: Record<string, 
   return lines
     .map((l) => {
       const who = l.speaker === "you" ? "Ricardo" : (names[l.speaker] ?? l.speaker);
-      const label = l.kind === "briefing" ? `${who} (chair, to Ricardo)` : who;
+      const label = l.kind === "briefing" ? `${who} (to Ricardo)` : l.kind === "rebuttal" ? `${who} (responding)` : who;
       return `${label}: ${l.content}`;
     })
     .join("\n\n");

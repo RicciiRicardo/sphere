@@ -71,6 +71,15 @@ export async function migrate() {
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- Ricardo's thumbs up/down on a seat's answer; feeds each seat's track record.
+    CREATE TABLE IF NOT EXISTS seat_feedback (
+      turn_id TEXT NOT NULL,
+      seat_id TEXT NOT NULL,
+      verdict TEXT NOT NULL CHECK (verdict IN ('up', 'down')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (turn_id, seat_id)
+    );
+
     CREATE TABLE IF NOT EXISTS memory (
       id SERIAL PRIMARY KEY,
       kind TEXT NOT NULL,

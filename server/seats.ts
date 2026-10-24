@@ -15,6 +15,40 @@ export interface Seat {
 
 export interface SeatView extends Seat {
   ready: boolean;
+  // Share of rated answers Ricardo liked (smoothed), and how many he rated.
+  record: number;
+  rated: number;
+}
+
+export type TrackRecord = Record<string, { rate: number; rated: number }>;
+
+// Laplace-smoothed approval rate, so a seat with no ratings starts at 50%
+// and one lucky thumbs-up doesn't make it 100%.
+export async function trackRecords(): Promise<TrackRecord> {
+  const { rows } = await db.query<{ seat_id: string; up: number; total: number }>(
+    `SELECT seat_id, COUNT(*) FILTER (WHERE verdict = 'up')::int AS up, COUNT(*)::int AS total
+     FROM seat_feedback GROUP BY seat_id`,
+  );
+  return Object.fromEntries(rows.map((r) => [r.seat_id, { rate: (r.up + 1) / (r.total + 2), rated: r.total }]));
+}
+
+export async function rateAnswer(turnId: string, seatId: string, verdict: "up" | "down" | null) {
+  if (verdict === null) {
+    await db.query("DELETE FROM seat_feedback WHERE turn_id = $1 AND seat_id = $2", [turnId, seatId]);
+    return;
+  }
+  await db.query(
+    `INSERT INTO seat_feedback (turn_id, seat_id, verdict) VALUES ($1, $2, $3)
+     ON CONFLICT (turn_id, seat_id) DO UPDATE SET verdict = EXCLUDED.verdict, created_at = NOW()`,
+    [turnId, seatId, verdict],
+  );
+}
+
+export async function listFeedback(): Promise<{ turn_id: string; seat_id: string; verdict: "up" | "down" }[]> {
+  const { rows } = await db.query<{ turn_id: string; seat_id: string; verdict: "up" | "down" }>(
+    "SELECT turn_id, seat_id, verdict FROM seat_feedback",
+  );
+  return rows;
 }
 
 // Starting lineup from the Sphere concept doc. Every field is editable in the
@@ -120,8 +154,13 @@ export async function seedSeats() {
 }
 
 export async function listSeats(): Promise<SeatView[]> {
-  const { rows } = await db.query<Seat>("SELECT * FROM seats ORDER BY sort, id");
-  return rows.map((s) => ({ ...s, ready: s.enabled && isProviderReady(s.provider) }));
+  const [{ rows }, track] = await Promise.all([db.query<Seat>("SELECT * FROM seats ORDER BY sort, id"), trackRecords()]);
+  return rows.map((s) => ({
+    ...s,
+    ready: s.enabled && isProviderReady(s.provider),
+    record: track[s.id]?.rate ?? 0.5,
+    rated: track[s.id]?.rated ?? 0,
+  }));
 }
 
 export async function setChair(id: string) {
