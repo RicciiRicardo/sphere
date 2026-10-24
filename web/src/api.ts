@@ -11,6 +11,26 @@ export interface Seat {
   is_chair: boolean;
   sort: number;
   ready: boolean;
+  record: number;
+  rated: number;
+}
+
+export type TurnMode = "auto" | "briefing" | "roundtable" | "pitch";
+
+export interface Bid {
+  seatId: string;
+  plan: string;
+  why: string;
+  confidence: number;
+  record: number;
+  rated: number;
+  score: number;
+}
+
+export interface Feedback {
+  turn_id: string;
+  seat_id: string;
+  verdict: "up" | "down";
 }
 
 export interface MemoryItem {
@@ -35,6 +55,7 @@ export interface AppState {
   seats: Seat[];
   memory: MemoryItem[];
   messages: StoredMessage[];
+  feedback: Feedback[];
   mock: boolean;
   memoryKinds: string[];
   providers: Provider[];
@@ -42,9 +63,12 @@ export interface AppState {
 
 export type TeamEvent =
   | { type: "turn"; turnId: string }
-  | { type: "routing"; seats: string[]; reason: string; direct: boolean }
+  | { type: "routing"; seats: string[]; reason: string; direct: boolean; mode?: TurnMode }
+  | { type: "round"; round: number; label: string }
+  | ({ type: "bid" } & Bid)
+  | { type: "winner"; seatId: string; text: string }
   | { type: "thinking"; seatId: string }
-  | { type: "seat"; seatId: string; text: string }
+  | { type: "seat"; seatId: string; text: string; round?: number }
   | { type: "seat_error"; seatId: string; error: string }
   | { type: "final"; seatId: string; text: string }
   | { type: "notice"; text: string }
@@ -73,6 +97,11 @@ export const api = {
   addSeat: (seat: Pick<Seat, "name" | "title" | "provider" | "model" | "role_card">) =>
     call<{ seats: Seat[] }>("/api/seats", { method: "POST", body: JSON.stringify(seat) }),
   models: (provider: Provider) => call<{ models: string[]; error?: string }>(`/api/models/${provider}`),
+  feedback: (turnId: string, seatId: string, verdict: "up" | "down" | null) =>
+    call<{ seats: Seat[]; feedback: Feedback[] }>("/api/feedback", {
+      method: "POST",
+      body: JSON.stringify({ turnId, seatId, verdict }),
+    }),
   removeSeat: (id: string) => call<{ seats: Seat[] }>(`/api/seats/${id}`, { method: "DELETE" }),
   addMemory: (kind: string, content: string) =>
     call<{ memory: MemoryItem[] }>("/api/memory", { method: "POST", body: JSON.stringify({ kind, content }) }),
@@ -82,7 +111,7 @@ export const api = {
 };
 
 // Sends one message to the team and calls onEvent for each streamed event.
-export async function sendTurn(text: string, mode: "auto" | "briefing", onEvent: (e: TeamEvent) => void) {
+export async function sendTurn(text: string, mode: TurnMode, onEvent: (e: TeamEvent) => void) {
   const res = await fetch("/api/turn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

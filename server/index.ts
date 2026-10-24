@@ -3,9 +3,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { db, migrate } from "./db.js";
 import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
-import { addSeat, listSeats, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
+import { addSeat, listFeedback, listSeats, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
 import { addMemory, deleteMemory, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
-import { runTurn, type TeamEvent } from "./team.js";
+import { runTurn, type TeamEvent, type TurnMode } from "./team.js";
 
 const PROD = process.env.NODE_ENV === "production";
 const PORT = Number(process.env.PORT ?? 5180);
@@ -72,20 +72,22 @@ app.use("/api", (req, res, next) => {
 });
 
 app.get("/api/state", async (_req, res) => {
-  const [seats, memory, messages] = await Promise.all([
+  const [seats, memory, messages, feedback] = await Promise.all([
     listSeats(),
     listMemory(),
     db.query(
-      `SELECT * FROM (SELECT * FROM messages ORDER BY id DESC LIMIT 200) t ORDER BY id`,
+      `SELECT * FROM (SELECT * FROM messages ORDER BY id DESC LIMIT 300) t ORDER BY id`,
     ),
+    listFeedback(),
   ]);
-  res.json({ seats, memory, messages: messages.rows, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
+  res.json({ seats, memory, messages: messages.rows, feedback, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
 });
 
 // One turn of conversation, streamed back as server-sent events.
 app.post("/api/turn", async (req, res) => {
   const text = String(req.body?.text ?? "").trim();
-  const mode = req.body?.mode === "briefing" ? "briefing" : "auto";
+  const modes: TurnMode[] = ["auto", "briefing", "roundtable", "pitch"];
+  const mode: TurnMode = modes.includes(req.body?.mode) ? req.body.mode : "auto";
   if (!text) {
     res.status(400).json({ error: "Say something first." });
     return;
@@ -125,6 +127,17 @@ app.get("/api/models/:provider", async (req, res) => {
   } catch (err) {
     res.json({ models: [], error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+// Thumbs up or down on one seat's answer in one turn; null clears it.
+app.post("/api/feedback", async (req, res) => {
+  const { turnId, seatId, verdict } = req.body ?? {};
+  if (!turnId || !seatId || !["up", "down", null].includes(verdict)) {
+    res.status(400).json({ error: "turnId, seatId and a verdict of up, down or null are required." });
+    return;
+  }
+  await rateAnswer(String(turnId), String(seatId), verdict);
+  res.json({ seats: await listSeats(), feedback: await listFeedback() });
 });
 
 app.put("/api/seats/:id", async (req, res) => {

@@ -4,19 +4,23 @@ import {
   AuthError,
   sendTurn,
   type AppState,
+  type Bid,
   type MemoryItem,
   type Provider,
   type Seat,
   type StoredMessage,
   type TeamEvent,
+  type TurnMode,
 } from "./api";
 import { canListen, canSpeak, listen, speak, stopSpeaking, type Listener } from "./voice";
 
 interface Turn {
   id: string;
   userText: string;
-  routing?: { seats: string[]; reason: string; direct: boolean };
-  replies: { seatId: string; text?: string; error?: string }[];
+  routing?: { seats: string[]; reason: string; direct: boolean; mode?: TurnMode };
+  replies: { seatId: string; text?: string; error?: string; round?: number }[];
+  bids: Bid[];
+  winner?: { seatId: string; text: string };
   final?: { seatId: string; text: string };
   notices: string[];
   thinking: string[];
@@ -57,7 +61,7 @@ function turnsFromMessages(messages: StoredMessage[]): Turn[] {
   for (const m of messages) {
     let t = turns.get(m.turn_id);
     if (!t) {
-      t = { id: m.turn_id, userText: "", replies: [], notices: [], thinking: [], live: false };
+      t = { id: m.turn_id, userText: "", replies: [], bids: [], notices: [], thinking: [], live: false };
       turns.set(m.turn_id, t);
     }
     if (m.kind === "user") t.userText = m.content;
@@ -68,6 +72,16 @@ function turnsFromMessages(messages: StoredMessage[]): Turn[] {
         /* ignore malformed rows */
       }
     } else if (m.kind === "seat") t.replies.push({ seatId: m.speaker, text: m.content });
+    else if (m.kind === "rebuttal") t.replies.push({ seatId: m.speaker, text: m.content, round: 2 });
+    else if (m.kind === "bid" || m.kind === "winner") {
+      try {
+        const v = JSON.parse(m.content);
+        if (m.kind === "bid") t.bids.push(v);
+        else t.winner = { seatId: v.seatId, text: v.note };
+      } catch {
+        /* ignore malformed rows */
+      }
+    }
     else if (m.kind === "error") t.replies.push({ seatId: m.speaker, error: m.content });
     else if (m.kind === "briefing") t.final = { seatId: m.speaker, text: m.content };
     else if (m.kind === "notice") t.notices.push(m.content);
@@ -85,14 +99,20 @@ function turnsFromMessages(messages: StoredMessage[]): Turn[] {
 function applyEvent(turn: Turn, e: TeamEvent): Turn {
   switch (e.type) {
     case "routing":
-      return { ...turn, routing: { seats: e.seats, reason: e.reason, direct: e.direct } };
+      return { ...turn, routing: { seats: e.seats, reason: e.reason, direct: e.direct, mode: e.mode } };
+    case "bid": {
+      const { type: _type, ...bid } = e;
+      return { ...turn, thinking: turn.thinking.filter((id) => id !== e.seatId), bids: [...turn.bids, bid] };
+    }
+    case "winner":
+      return { ...turn, winner: { seatId: e.seatId, text: e.text } };
     case "thinking":
       return { ...turn, thinking: [...turn.thinking, e.seatId] };
     case "seat":
       return {
         ...turn,
         thinking: turn.thinking.filter((id) => id !== e.seatId),
-        replies: [...turn.replies, { seatId: e.seatId, text: e.text }],
+        replies: [...turn.replies, { seatId: e.seatId, text: e.text, round: e.round }],
       };
     case "seat_error":
       return {
@@ -141,6 +161,7 @@ export function App() {
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<"none" | "team" | "memory">("none");
   const [editing, setEditing] = useState<string | null>(null);
+  const [composeMode, setComposeMode] = useState<"auto" | "roundtable" | "pitch">("auto");
   const listener = useRef<Listener | null>(null);
   const threadEnd = useRef<HTMLDivElement>(null);
 
@@ -172,7 +193,7 @@ export function App() {
   const liveTurn = turns.find((t) => t.live);
 
   const send = useCallback(
-    async (text: string, mode: "auto" | "briefing" = "auto") => {
+    async (text: string, mode: TurnMode = "auto") => {
       const clean = text.trim();
       if (!clean || busy) return;
       setDraft("");
@@ -182,7 +203,7 @@ export function App() {
       const placeholderId = `live-${Date.now()}`;
       setTurns((ts) => [
         ...ts,
-        { id: placeholderId, userText: clean, replies: [], notices: [], thinking: [], live: true },
+        { id: placeholderId, userText: clean, replies: [], bids: [], notices: [], thinking: [], live: true },
       ]);
       let currentId = placeholderId;
       try {
@@ -214,6 +235,20 @@ export function App() {
     [busy, voiceOn],
   );
 
+  // Thumbs up/down on a seat's answer; tapping the same verdict again clears it.
+  const rate = async (turnId: string, seatId: string, verdict: "up" | "down") => {
+    if (!state) return;
+    const current = state.feedback.find((f) => f.turn_id === turnId && f.seat_id === seatId)?.verdict;
+    try {
+      const res = await api.feedback(turnId, seatId, current === verdict ? null : verdict);
+      setState((s) => (s ? { ...s, seats: res.seats, feedback: res.feedback } : s));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const verdictFor = (turnId: string, seatId: string) =>
+    state?.feedback.find((f) => f.turn_id === turnId && f.seat_id === seatId)?.verdict;
+
   const toggleMic = () => {
     if (listening) {
       listener.current?.stop();
@@ -227,7 +262,10 @@ export function App() {
       (finalText) => {
         setListening(false);
         listener.current = null;
-        if (finalText) send(finalText);
+        if (finalText) {
+          send(finalText, composeMode);
+          setComposeMode("auto");
+        }
       },
       (msg) => setError(msg),
     );
@@ -288,6 +326,11 @@ export function App() {
                   {s.is_chair && <span className="badge">Chair</span>}
                 </span>
                 <span className="seat-title">{s.title}</span>
+                {s.rated > 0 && (
+                  <span className="seat-title">
+                    Track record {Math.round(s.record * 100)}% · {s.rated} rated
+                  </span>
+                )}
                 <span className="seat-status">
                   {!s.enabled ? "Benched" : !s.ready ? "Not connected" : thinking ? "Thinking…" : routed ? "On this one" : "Ready"}
                 </span>
@@ -299,7 +342,7 @@ export function App() {
           + Add a seat
         </button>
         <p className="hint">
-          Say a name first to talk to one seat ("Grok, what's happening?"). Say "Muse, take the chair" to change who chairs.
+          Say a name first to talk to one seat ("Grok, what's happening?"). "Team, debate this" starts a Roundtable; "Who wants this?" starts a Pitch. 👍/👎 on answers builds each seat's track record.
         </p>
       </aside>
 
@@ -315,7 +358,16 @@ export function App() {
           </div>
         )}
         {turns.map((t) => (
-          <TurnView key={t.id} turn={t} seatById={seatById} seats={seats} />
+          <TurnView
+            key={t.id}
+            turn={t}
+            seatById={seatById}
+            seats={seats}
+            busy={busy}
+            verdictFor={verdictFor}
+            onRate={rate}
+            onAssign={(seatId) => send(`${seatById[seatId]?.name ?? seatId}, you take this one. Go ahead with your plan.`)}
+          />
         ))}
         <div ref={threadEnd} />
       </main>
@@ -330,21 +382,52 @@ export function App() {
 
       <footer className="composer">
         {error && <p className="error">{error}</p>}
+        <div className="modes" role="radiogroup" aria-label="How the team answers">
+          {(
+            [
+              ["auto", "Team", "The coordinator picks who answers; the chair merges"],
+              ["roundtable", "Roundtable", "Every seat weighs in, then responds to the others"],
+              ["pitch", "Pitch", "Seats bid for the task; the best bid does it"],
+            ] as const
+          ).map(([value, label, title]) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={composeMode === value}
+              title={title}
+              className={`ghost small ${composeMode === value ? "on" : ""}`}
+              onClick={() => setComposeMode(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            send(draft);
+            send(draft, composeMode);
+            setComposeMode("auto");
           }}
         >
           <textarea
             value={draft}
-            placeholder={listening ? "Listening…" : "Talk to the team…"}
+            placeholder={
+              listening
+                ? "Listening…"
+                : composeMode === "roundtable"
+                  ? "What should the team debate?"
+                  : composeMode === "pitch"
+                    ? "What task should the seats pitch for?"
+                    : "Talk to the team…"
+            }
             rows={1}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                send(draft);
+                send(draft, composeMode);
+                setComposeMode("auto");
               }
             }}
           />
@@ -374,9 +457,43 @@ export function App() {
   );
 }
 
-function TurnView({ turn, seatById, seats }: { turn: Turn; seatById: Record<string, Seat>; seats: Seat[] }) {
+function TurnView({
+  turn,
+  seatById,
+  seats,
+  busy,
+  verdictFor,
+  onRate,
+  onAssign,
+}: {
+  turn: Turn;
+  seatById: Record<string, Seat>;
+  seats: Seat[];
+  busy: boolean;
+  verdictFor: (turnId: string, seatId: string) => "up" | "down" | undefined;
+  onRate: (turnId: string, seatId: string, verdict: "up" | "down") => void;
+  onAssign: (seatId: string) => void;
+}) {
   const name = (id: string) => seatById[id]?.name ?? id;
   const color = (id: string) => colorFor(id, Math.max(0, seats.findIndex((s) => s.id === id)));
+  const saved = !turn.live && !turn.id.startsWith("live-");
+  const rating = (seatId: string) =>
+    saved && (
+      <span className="rating">
+        {(["up", "down"] as const).map((v) => (
+          <button
+            key={v}
+            className={`ghost small ${verdictFor(turn.id, seatId) === v ? "on" : ""}`}
+            title={v === "up" ? "Good answer: raises this seat's track record" : "Weak answer: lowers this seat's track record"}
+            onClick={() => onRate(turn.id, seatId, v)}
+          >
+            {v === "up" ? "👍" : "👎"}
+          </button>
+        ))}
+      </span>
+    );
+  const roundtable = turn.routing?.mode === "roundtable";
+  const rounds = roundtable ? [1, 2] : [undefined];
   return (
     <section className="turn">
       <div className="you">{turn.userText}</div>
@@ -386,16 +503,61 @@ function TurnView({ turn, seatById, seats }: { turn: Turn; seatById: Record<stri
           {turn.routing.reason}
         </div>
       )}
-      {turn.replies.map((r, i) => (
-        <details key={`${r.seatId}-${i}`} className={`reply ${r.error ? "failed" : ""}`} style={{ borderColor: color(r.seatId) }}>
-          <summary>
-            <span className="dot" style={{ background: color(r.seatId) }} />
-            {name(r.seatId)}
-            <span className="muted">{r.error ? "couldn't answer" : seatById[r.seatId]?.title}</span>
-          </summary>
-          <div className="body">{r.error ?? r.text}</div>
-        </details>
-      ))}
+      {rounds.map((round) => {
+        const replies = turn.replies.filter((r) => (roundtable ? (r.round ?? 1) === round : true));
+        if (!replies.length) return null;
+        return (
+          <div key={round ?? "all"} className="round">
+            {roundtable && <h3 className="round-label">{round === 1 ? "Opening views" : "Responses"}</h3>}
+            {replies.map((r, i) => (
+              <details
+                key={`${r.seatId}-${i}`}
+                className={`reply ${r.error ? "failed" : ""}`}
+                style={{ borderColor: color(r.seatId) }}
+                open={roundtable && !r.error}
+              >
+                <summary>
+                  <span className="dot" style={{ background: color(r.seatId) }} />
+                  {name(r.seatId)}
+                  <span className="muted">{r.error ? "couldn't answer" : seatById[r.seatId]?.title}</span>
+                </summary>
+                <div className="body">{r.error ?? r.text}</div>
+                {!r.error && r.round !== 2 && rating(r.seatId)}
+              </details>
+            ))}
+          </div>
+        );
+      })}
+      {turn.bids.length > 0 && (
+        <div className="round">
+          <h3 className="round-label">Bids</h3>
+          {[...turn.bids]
+            .sort((a, b) => b.score - a.score)
+            .map((b) => {
+              const won = turn.winner?.seatId === b.seatId;
+              return (
+                <div key={b.seatId} className={`bid ${won ? "won" : ""}`} style={{ borderColor: color(b.seatId) }}>
+                  <div className="final-head">
+                    <span className="dot" style={{ background: color(b.seatId) }} />
+                    {name(b.seatId)}
+                    {won && <span className="badge">Won</span>}
+                    <span className="muted bid-score">
+                      Confidence {b.confidence} · record {Math.round(b.record * 100)}%
+                    </span>
+                  </div>
+                  <div className="body">{b.plan}</div>
+                  {b.why && <div className="muted">{b.why}</div>}
+                  {!won && saved && (
+                    <button className="ghost small" disabled={busy} onClick={() => onAssign(b.seatId)}>
+                      Give it to {name(b.seatId)}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+        </div>
+      )}
+      {turn.winner && <div className="routing">{turn.winner.text}</div>}
       {turn.thinking.map((id) => (
         <div key={id} className="thinking-line">
           <span className="dot pulse" style={{ background: color(id) }} />
@@ -410,9 +572,12 @@ function TurnView({ turn, seatById, seats }: { turn: Turn; seatById: Record<stri
             {seatById[turn.final.seatId]?.is_chair && <span className="badge">Chair</span>}
           </div>
           <div className="body">{turn.final.text}</div>
-          <button className="ghost small" onClick={() => speak(turn.final!.text, turn.final!.seatId)}>
-            Play
-          </button>
+          <div className="row">
+            <button className="ghost small" onClick={() => speak(turn.final!.text, turn.final!.seatId)}>
+              Play
+            </button>
+            {rating(turn.final.seatId)}
+          </div>
         </div>
       )}
       {turn.notices.map((n, i) => (

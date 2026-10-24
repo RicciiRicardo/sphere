@@ -343,6 +343,47 @@ h3 {
   font-size: 14px;
   padding-left: 4px;
 }
+.round {
+  display: grid;
+  gap: 8px;
+}
+.round-label {
+  margin: 4px 0 0;
+  text-transform: none;
+}
+.bid {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+}
+.bid button {
+  justify-self: start;
+}
+.bid.won {
+  border-width: 2px;
+  border-left-width: 4px;
+}
+.bid-score {
+  margin-left: auto;
+  font-weight: 400;
+}
+.rating {
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.final .rating {
+  margin-top: 10px;
+}
+.modes {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
 .final {
   background: var(--card);
   border: 1px solid var(--line);
