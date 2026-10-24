@@ -27,3 +27,17 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: SPHERE_TIMEZONE
+        value: America/New_York
+      - key: MAIL_IMAP_HOST
+        sync: false
+      - key: MAIL_SMTP_HOST
+        sync: false
+      - key: MAIL_USER
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: ICLOUD_USER
+        sync: false
+      - key: ICLOUD_APP_PASSWORD
+        sync: false

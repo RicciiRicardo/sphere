@@ -27,6 +27,23 @@ export interface Bid {
   score: number;
 }
 
+export interface EmailDraft {
+  id: number;
+  turn_id: string;
+  seat_id: string;
+  to_addr: string;
+  subject: string;
+  body: string;
+  in_reply_to: string | null;
+  status: "proposed" | "saved" | "sent" | "discarded";
+  error: string | null;
+}
+
+export interface Connections {
+  mail: { configured: boolean; account: string };
+  calendar: { configured: boolean };
+}
+
 export interface Feedback {
   turn_id: string;
   seat_id: string;
@@ -56,6 +73,8 @@ export interface AppState {
   memory: MemoryItem[];
   messages: StoredMessage[];
   feedback: Feedback[];
+  drafts: EmailDraft[];
+  connections: Connections;
   mock: boolean;
   memoryKinds: string[];
   providers: Provider[];
@@ -73,6 +92,7 @@ export type TeamEvent =
   | { type: "final"; seatId: string; text: string }
   | { type: "notice"; text: string }
   | { type: "memory"; added: MemoryItem[] }
+  | { type: "draft"; draft: EmailDraft }
   | { type: "done" };
 
 export class AuthError extends Error {}
@@ -102,6 +122,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ turnId, seatId, verdict }),
     }),
+  testConnections: () => call<{ mail: string; calendar: string }>("/api/connections/test"),
+  editDraft: (id: number, to: string, subject: string, body: string) =>
+    call<{ drafts: EmailDraft[] }>(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ to, subject, body }) }),
+  draftAction: (id: number, action: "save" | "send" | "discard") =>
+    call<{ drafts: EmailDraft[]; message?: string }>(`/api/drafts/${id}/${action}`, { method: "POST" }),
   removeSeat: (id: string) => call<{ seats: Seat[] }>(`/api/seats/${id}`, { method: "DELETE" }),
   addMemory: (kind: string, content: string) =>
     call<{ memory: MemoryItem[] }>("/api/memory", { method: "POST", body: JSON.stringify({ kind, content }) }),

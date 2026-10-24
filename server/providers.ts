@@ -165,6 +165,12 @@ function mockReply(speaker: string, prompt: string, system: string): Promise<str
     const confidence = 40 + ((speaker.length * 17) % 55);
     return wait(`PLAN: ${speaker} would break the task into steps and deliver a first draft today.\nWHY ME: It fits my role on the team.\nCONFIDENCE: ${confidence}`);
   }
+  const said = prompt.split("RICARDO NOW SAYS\n")[1]?.split("\n")[0] ?? ask;
+  if (system.includes("EMAIL DRAFTS") && /\b(draft|reply|email|write to)\b/i.test(said)) {
+    return wait(
+      `I've drafted a reply to Vanessa with the landed-cost numbers. (${speaker}, mock)\n\n[[DRAFT]]\nTo: Vanessa Brown <vanessa@example.com>\nSubject: Re: King Tamer shipment to Kingston\nIn-Reply-To: <mock-3@example.com>\n---\nHi Vanessa,\n\nLanded cost for 200 units comes to about $X per unit including duty and freight. I'll confirm the final figure by Thursday.\n\nBest,\nRicardo\n[[/DRAFT]]`,
+    );
+  }
   if (system.includes("round two")) {
     return wait(`I agree with most of that, but I'd push back on the timeline: it's too tight. (${speaker}, mock response)`);
   }
