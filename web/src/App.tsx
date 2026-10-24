@@ -5,6 +5,8 @@ import {
   sendTurn,
   type AppState,
   type Bid,
+  type Connections,
+  type EmailDraft,
   type MemoryItem,
   type Provider,
   type Seat,
@@ -214,6 +216,10 @@ export function App() {
             setTurns((ts) => ts.map((t) => (t.id === fromId ? { ...t, id: e.turnId } : t)));
             return;
           }
+          if (e.type === "draft") {
+            setState((s) => (s ? { ...s, drafts: [...s.drafts, e.draft] } : s));
+            return;
+          }
           if (e.type === "memory") {
             setState((s) => (s ? { ...s, memory: [...e.added, ...s.memory] } : s));
             return;
@@ -366,6 +372,9 @@ export function App() {
             busy={busy}
             verdictFor={verdictFor}
             onRate={rate}
+            drafts={state.drafts.filter((d) => d.turn_id === t.id && d.status !== "discarded")}
+            mailReady={state.connections.mail.configured}
+            onDrafts={(drafts) => setState((s) => (s ? { ...s, drafts } : s))}
             onAssign={(seatId) => send(`${seatById[seatId]?.name ?? seatId}, you take this one. Go ahead with your plan.`)}
           />
         ))}
@@ -373,6 +382,7 @@ export function App() {
       </main>
 
       <aside className="memory">
+        <ConnectionsBox connections={state.connections} />
         <MemoryPanel
           memory={state.memory}
           kinds={state.memoryKinds}
@@ -465,7 +475,13 @@ function TurnView({
   verdictFor,
   onRate,
   onAssign,
+  drafts,
+  mailReady,
+  onDrafts,
 }: {
+  drafts: EmailDraft[];
+  mailReady: boolean;
+  onDrafts: (drafts: EmailDraft[]) => void;
   turn: Turn;
   seatById: Record<string, Seat>;
   seats: Seat[];
@@ -580,12 +596,138 @@ function TurnView({
           </div>
         </div>
       )}
+      {drafts.map((d) => (
+        <DraftCard key={d.id} draft={d} mailReady={mailReady} onDrafts={onDrafts} />
+      ))}
       {turn.notices.map((n, i) => (
         <div key={i} className="notice">
           {n}
         </div>
       ))}
     </section>
+  );
+}
+
+function ConnectionsBox({ connections }: { connections: Connections }) {
+  const [result, setResult] = useState<{ mail: string; calendar: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+  return (
+    <div className="connections">
+      <h2>Connections</h2>
+      <p className="conn-line">
+        <span className={`dot ${connections.mail.configured ? "ok" : "off"}`} />
+        Email: {connections.mail.configured ? connections.mail.account : "not set up"}
+      </p>
+      <p className="conn-line">
+        <span className={`dot ${connections.calendar.configured ? "ok" : "off"}`} />
+        Calendar: {connections.calendar.configured ? "iCloud" : "not set up"}
+      </p>
+      {(connections.mail.configured || connections.calendar.configured) && (
+        <button
+          className="ghost small"
+          disabled={testing}
+          onClick={async () => {
+            setTesting(true);
+            try {
+              setResult(await api.testConnections());
+            } catch (e) {
+              setResult({ mail: e instanceof Error ? e.message : String(e), calendar: "" });
+            } finally {
+              setTesting(false);
+            }
+          }}
+        >
+          {testing ? "Testing…" : "Test connections"}
+        </button>
+      )}
+      {result && (
+        <p className="muted">
+          {result.mail}
+          {result.calendar && (
+            <>
+              <br />
+              {result.calendar}
+            </>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const DRAFT_STATUS: Record<EmailDraft["status"], string> = {
+  proposed: "Draft for your review",
+  saved: "Saved to your Drafts folder",
+  sent: "Sent",
+  discarded: "Discarded",
+};
+
+function DraftCard({ draft, mailReady, onDrafts }: { draft: EmailDraft; mailReady: boolean; onDrafts: (d: EmailDraft[]) => void }) {
+  const [to, setTo] = useState(draft.to_addr);
+  const [subject, setSubject] = useState(draft.subject);
+  const [body, setBody] = useState(draft.body);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(draft.error ?? "");
+  const locked = draft.status === "sent" || draft.status === "discarded";
+  const changed = to !== draft.to_addr || subject !== draft.subject || body !== draft.body;
+
+  const act = async (action: "save" | "send" | "discard") => {
+    if (action === "send" && !confirm(`Send this email to ${to}?`)) return;
+    setBusy(true);
+    setNote("");
+    try {
+      if (changed && action !== "discard") await api.editDraft(draft.id, to, subject, body);
+      const res = await api.draftAction(draft.id, action);
+      onDrafts(res.drafts);
+      if (res.message) setNote(res.message);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={`draft ${draft.status}`}>
+      <div className="final-head">
+        <span>✉️ Email</span>
+        <span className="muted">{DRAFT_STATUS[draft.status]}</span>
+      </div>
+      <label>
+        To
+        <input value={to} disabled={locked} placeholder="name@company.com" onChange={(e) => setTo(e.target.value)} />
+      </label>
+      <label>
+        Subject
+        <input value={subject} disabled={locked} onChange={(e) => setSubject(e.target.value)} />
+      </label>
+      <textarea rows={Math.min(14, body.split("\n").length + 2)} value={body} disabled={locked} onChange={(e) => setBody(e.target.value)} />
+      {!locked && (
+        <div className="row">
+          {mailReady ? (
+            <>
+              <button className="small" disabled={busy || !/@/.test(to)} onClick={() => act("send")}>
+                Send
+              </button>
+              {draft.status === "proposed" && (
+                <button className="ghost small" disabled={busy} onClick={() => act("save")}>
+                  Save to Drafts
+                </button>
+              )}
+            </>
+          ) : (
+            <span className="muted">Connect your email to send or save this.</span>
+          )}
+          <button className="ghost small" disabled={busy} onClick={() => act("discard")}>
+            Discard
+          </button>
+          <button className="ghost small" onClick={() => navigator.clipboard?.writeText(`To: ${to}\nSubject: ${subject}\n\n${body}`)}>
+            Copy
+          </button>
+        </div>
+      )}
+      {note && <p className={note.startsWith("Couldn't") ? "error" : "muted"}>{note}</p>}
+    </div>
   );
 }
 

@@ -6,6 +6,9 @@ import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from ".
 import { addSeat, listFeedback, listSeats, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
 import { addMemory, deleteMemory, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
 import { runTurn, type TeamEvent, type TurnMode } from "./team.js";
+import { editDraft, getDraft, listDrafts, setDraftStatus } from "./drafts.js";
+import { mailAccount, mailConfigured, recentInbox, saveDraft, sendEmail } from "./mail.js";
+import { calendarConfigured, upcomingEvents } from "./calendar.js";
 
 const PROD = process.env.NODE_ENV === "production";
 const PORT = Number(process.env.PORT ?? 5180);
@@ -72,15 +75,20 @@ app.use("/api", (req, res, next) => {
 });
 
 app.get("/api/state", async (_req, res) => {
-  const [seats, memory, messages, feedback] = await Promise.all([
+  const [seats, memory, messages, feedback, drafts] = await Promise.all([
     listSeats(),
     listMemory(),
     db.query(
       `SELECT * FROM (SELECT * FROM messages ORDER BY id DESC LIMIT 300) t ORDER BY id`,
     ),
     listFeedback(),
+    listDrafts(),
   ]);
-  res.json({ seats, memory, messages: messages.rows, feedback, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
+  const connections = {
+    mail: { configured: mailConfigured(), account: mailConfigured() ? mailAccount() : "" },
+    calendar: { configured: calendarConfigured() },
+  };
+  res.json({ seats, memory, messages: messages.rows, feedback, drafts, connections, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
 });
 
 // One turn of conversation, streamed back as server-sent events.
@@ -138,6 +146,82 @@ app.post("/api/feedback", async (req, res) => {
   }
   await rateAnswer(String(turnId), String(seatId), verdict);
   res.json({ seats: await listSeats(), feedback: await listFeedback() });
+});
+
+// Reads the inbox and calendar once and reports what came back, so a wrong
+// server name or password shows up here instead of mid-conversation.
+app.get("/api/connections/test", async (_req, res) => {
+  const result: Record<string, string> = {};
+  if (mailConfigured()) {
+    try {
+      const inbox = await recentInbox();
+      result.mail = `Connected: ${inbox.length} messages in the last 3 days.`;
+    } catch (err) {
+      result.mail = `Failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  } else result.mail = "Not set up.";
+  if (calendarConfigured()) {
+    try {
+      const events = await upcomingEvents();
+      result.calendar = `Connected: ${events.length} events in the next 7 days.`;
+    } catch (err) {
+      result.calendar = `Failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  } else result.calendar = "Not set up.";
+  res.json(result);
+});
+
+// Email drafts the team proposed. Nothing is sent without Ricardo tapping Send.
+app.put("/api/drafts/:id", async (req, res) => {
+  const { to, subject, body } = req.body ?? {};
+  await editDraft(Number(req.params.id), String(to ?? ""), String(subject ?? ""), String(body ?? ""));
+  res.json({ drafts: await listDrafts() });
+});
+
+app.post("/api/drafts/:id/:action", async (req, res) => {
+  const draft = await getDraft(Number(req.params.id));
+  const action = req.params.action;
+  if (!draft) {
+    res.status(404).json({ error: "No such draft." });
+    return;
+  }
+  if (action === "discard") {
+    await setDraftStatus(draft.id, "discarded");
+    res.json({ drafts: await listDrafts() });
+    return;
+  }
+  if (action !== "save" && action !== "send") {
+    res.status(400).json({ error: "Unknown action." });
+    return;
+  }
+  if (!mailConfigured()) {
+    res.status(400).json({ error: "Email isn't connected yet." });
+    return;
+  }
+  if (draft.status === "sent" || draft.status === "discarded") {
+    res.status(400).json({ error: `This draft was already ${draft.status}.` });
+    return;
+  }
+  if (action === "send" && !/@/.test(draft.to_addr)) {
+    res.status(400).json({ error: "Add a recipient address before sending." });
+    return;
+  }
+  const email = { to: draft.to_addr, subject: draft.subject, body: draft.body, inReplyTo: draft.in_reply_to ?? undefined };
+  try {
+    if (action === "save") {
+      const folder = await saveDraft(email);
+      await setDraftStatus(draft.id, "saved");
+      res.json({ drafts: await listDrafts(), message: `Saved to ${folder}.` });
+    } else {
+      await sendEmail(email);
+      await setDraftStatus(draft.id, "sent");
+      res.json({ drafts: await listDrafts(), message: `Sent to ${draft.to_addr}.` });
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await setDraftStatus(draft.id, draft.status, error);
+    res.status(502).json({ error: `Couldn't ${action === "save" ? "save" : "send"} it: ${error}` });
+  }
 });
 
 app.put("/api/seats/:id", async (req, res) => {

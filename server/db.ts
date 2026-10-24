@@ -80,6 +80,22 @@ export async function migrate() {
       PRIMARY KEY (turn_id, seat_id)
     );
 
+    -- Emails the team proposed. Status: proposed, saved (in the mailbox's
+    -- Drafts folder), sent, or discarded.
+    CREATE TABLE IF NOT EXISTS email_drafts (
+      id SERIAL PRIMARY KEY,
+      turn_id TEXT NOT NULL,
+      seat_id TEXT NOT NULL,
+      to_addr TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL,
+      in_reply_to TEXT,
+      status TEXT NOT NULL DEFAULT 'proposed',
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS memory (
       id SERIAL PRIMARY KEY,
       kind TEXT NOT NULL,

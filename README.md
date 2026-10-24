@@ -12,6 +12,7 @@ Phase 1 of the [Sphere concept](https://claude.ai/artifact/WivxvxcFcNA8GFqFLiS2c
 - **Roundtable.** "Team, debate this" (or the Roundtable button): every seat gives an opening view, then responds to the others by name; the chair closes with where the team agrees, where it splits, and a recommendation.
 - **Pitch.** "Who wants this?" (or the Pitch button): every seat bids with a plan, why it fits, and a confidence score. The coordinator awards the task on fit, plan, teammates' views and track record (self-reported confidence counts least), the winner does it, and "Give it to…" hands it to another seat instead.
 - **Track record.** 👍/👎 on answers. Each seat's approval rate (smoothed, starting at 50%) shows in the team list and weighs its Pitch bids.
+- **Email and calendar.** Reads the migroupco.com inbox (IMAP) and iCloud Calendar (CalDAV) when a message is about email, meetings or the schedule, and always for the morning briefing. When you ask for an email, the team writes it as a draft card you can edit, **Save to Drafts** (it lands in the mailbox's own Drafts folder), or **Send**. Nothing is sent without your tap and a confirmation. Email text is treated as information, never as instructions.
 - **Morning briefing.** Say "good morning" or tap the button.
 - **Pluggable seats.** Add a seat for any model whose provider is supported, edit role cards and model IDs, or bench a seat.
 
@@ -30,6 +31,19 @@ Open http://localhost:5180. `SPHERE_MOCK=1` gives canned replies with no API cal
 2. In Render, choose **New → Blueprint** and pick this repo. Render reads `render.yaml`.
 3. Fill in `DATABASE_URL`, `SPHERE_PASSWORD` and each provider key you have. `SESSION_SECRET` is generated for you.
 4. A seat whose provider key is missing shows as "Not connected" and is skipped; add the key later and it comes online.
+
+## Email and calendar setup
+
+| Setting | Value |
+| --- | --- |
+| `MAIL_IMAP_HOST` / `MAIL_SMTP_HOST` | `mail.migroupco.com` (ports 993 and 465 by default; override with `MAIL_IMAP_PORT` / `MAIL_SMTP_PORT`) |
+| `MAIL_USER` / `MAIL_PASSWORD` | The mailbox login, e.g. `ricardo@migroupco.com` and its password |
+| `MAIL_FROM` | Optional: `Ricardo Berris <ricardo@migroupco.com>` |
+| `ICLOUD_USER` | Apple ID email |
+| `ICLOUD_APP_PASSWORD` | An app-specific password from appleid.apple.com → Sign-In and Security → App-Specific Passwords (not the Apple ID password) |
+| `SPHERE_TIMEZONE` | Defaults to `America/New_York` |
+
+Use **Test connections** in the app (top of the memory panel) to check both.
 
 ## Provider keys
 
