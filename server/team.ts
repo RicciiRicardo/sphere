@@ -396,13 +396,55 @@ function parseBid(seatId: string, text: string, track: TrackRecord): Bid {
   return { seatId, plan: grab("PLAN") || text.trim(), why: grab("WHY ME"), confidence, record: rate, rated, score };
 }
 
+const Verdict = z.object({ seatId: z.string(), reason: z.string() });
+
+// Models overrate themselves, so a bid's own confidence can't decide alone:
+// in live testing ChatGPT won a research task with confidence 78 while three
+// teammates' bids said Perplexity should do it. The coordinator judges the
+// bids on fit, plan, track record and what teammates said; the score is the
+// fallback when the coordinator isn't available.
+async function judgeBids(ctx: TurnContext, bids: Bid[]): Promise<{ seatId: string; reason: string }> {
+  const ranked = [...bids].sort((a, b) => b.score - a.score || b.confidence - a.confidence);
+  const fallback = {
+    seatId: ranked[0].seatId,
+    reason: `Highest bid score: confidence ${ranked[0].confidence}, track record ${Math.round(ranked[0].record * 100)}%.`,
+  };
+  if (isMock() || !isProviderReady("anthropic")) return fallback;
+  const seatName = (id: string) => ctx.seats.find((s) => s.id === id)?.name ?? id;
+  const roster = ctx.seats
+    .filter((s) => bids.some((b) => b.seatId === s.id))
+    .map((s) => `- ${s.id}: ${s.name}, ${s.title}. ${s.role_card}`)
+    .join("\n");
+  const table = bids
+    .map(
+      (b) =>
+        `- ${b.seatId} (${seatName(b.seatId)}): confidence ${b.confidence}, track record ${Math.round(b.record * 100)}% over ${b.rated} rated answers\n  PLAN: ${b.plan}\n  WHY ME: ${b.why}`,
+    )
+    .join("\n");
+  try {
+    const response = await anthropicClient().messages.parse({
+      model: COORDINATOR_MODEL,
+      max_tokens: 2000,
+      output_config: { format: zodOutputFormat(Verdict), effort: "low" },
+      system:
+        "You award a task on Ricardo's AI team to one seat after the seats have pitched for it. Judge which seat will actually do the task best. Weigh, in order: whether the seat's role and abilities fit the task (live web research needs the researcher; current events need the pulse seat; long documents need the analyst); whether teammates' bids point to another seat; the quality of the plan; the seat's track record when it has enough ratings. Self-reported confidence counts least, because models overrate themselves. Return the winning seat id from the list and a reason of at most 25 words that Ricardo will read.",
+      messages: [{ role: "user", content: `TASK\n${ctx.text}\n\nSEATS\n${roster}\n\nBIDS\n${table}` }],
+    });
+    const out = response.parsed_output;
+    if (out && bids.some((b) => b.seatId === out.seatId)) return out;
+  } catch (err) {
+    console.error("bid judging failed, using scores", err);
+  }
+  return fallback;
+}
+
 // Pitch: every seat bids for the task; the best bid, weighed against each
 // seat's track record, wins and does the work.
 async function runPitch(ctx: TurnContext): Promise<string> {
   const bidders = ctx.seats.filter((s) => s.enabled && s.ready);
   await announce(ctx, {
     seats: bidders.map((s) => s.id),
-    reason: "Pitch: every seat bids for the task; the best bid, weighed by track record, wins.",
+    reason: "Pitch: every seat bids for the task; the coordinator awards it to the best fit.",
     direct: false,
     mode: "pitch",
   });
@@ -422,9 +464,10 @@ async function runPitch(ctx: TurnContext): Promise<string> {
   );
   if (!bids.length) return chairCloses(ctx, "No seat could bid; answer Ricardo directly.");
 
-  const best = [...bids].sort((a, b) => b.score - a.score || b.confidence - a.confidence)[0];
+  const verdict = await judgeBids(ctx, bids);
+  const best = bids.find((b) => b.seatId === verdict.seatId)!;
   const winner = ctx.seats.find((s) => s.id === best.seatId)!;
-  const note = `${winner.name} wins the work: confidence ${best.confidence}, track record ${Math.round(best.record * 100)}% across ${best.rated} rated answers.`;
+  const note = `${winner.name} wins the work. ${verdict.reason}`;
   await record(ctx.turnId, "coordinator", "winner", JSON.stringify({ seatId: winner.id, note }));
   ctx.emit({ type: "winner", seatId: winner.id, text: note });
 
