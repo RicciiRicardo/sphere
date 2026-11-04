@@ -13,7 +13,7 @@ import {
 } from "./context.js";
 import { engineJSON } from "./engine.js";
 import { DRAFT_FORMAT, extractDrafts, storeDrafts, type EmailDraft } from "./drafts.js";
-import { formatInbox, mailConfigured, recentInbox } from "./mail.js";
+import { formatInbox, mailConfigured, recentInbox, searchMailbox } from "./mail.js";
 import { calendarConfigured, formatEvents, upcomingEvents } from "./calendar.js";
 import { emailEnabled, logEmailAccess } from "./settings.js";
 
@@ -133,6 +133,34 @@ ${memory}`;
 const LIVE_TOPICS =
   /\b(e-?mails?|inbox|mail|repl(y|ies)|respond|follow[- ]?up|outreach|draft|calendar|meetings?|schedule|agenda|today|tomorrow|this week|next week|appointments?|call with|free|busy|availability)\b/i;
 
+const SEARCH_REQUEST =
+  /\b(find|search|look(?:ing)? (?:for|through|up)|dig (?:up|out)|locate|pull up|track down|where(?:'s| is| are)|any(?:thing)? (?:from|about|on|regarding))\b/i;
+
+const MailSearch = z.object({
+  search: z.boolean(),
+  terms: z.array(z.string()),
+  days: z.number(),
+});
+
+// When Ricardo asks the team to find an email, the engine turns his words into
+// mailbox search terms. Falls back to quoted phrases and capitalised names.
+async function searchTerms(text: string): Promise<{ terms: string[]; days: number } | undefined> {
+  if (!SEARCH_REQUEST.test(text)) return undefined;
+  const out = await engineJSON(
+    MailSearch,
+    "Ricardo is asking his AI team about his email. Decide whether he wants specific emails found in his mailbox (search: true) or is just talking about recent mail (search: false). If searching, give two to five short terms an IMAP text search should look for: distinctive names, companies, event names, or single keywords likely to appear verbatim in those emails (e.g. 'Cerebral Valley', 'hackathon', 'Meta'). Never include generic words like email, details, submission or link alone. days is how far back to look: 180 unless he says otherwise, at most 730.",
+    text,
+    400,
+  );
+  if (out) return out.data.search && out.data.terms.length ? { terms: out.data.terms, days: Math.min(Math.max(out.data.days || 180, 7), 730) } : undefined;
+  const quoted = [...text.matchAll(/"([^"]{2,60})"/g)].map((m) => m[1]);
+  const names = [...text.matchAll(/\b([A-Z][\w&.-]+(?:\s+[A-Z][\w&.-]+)*)/g)]
+    .map((m) => m[1])
+    .filter((w) => !/^(I|Mily|Claude|Muse|Can|Could|Please|Find|Search|Check|What|Where|The|Team)$/.test(w));
+  const terms = [...quoted, ...names].slice(0, 5);
+  return terms.length ? { terms, days: 180 } : undefined;
+}
+
 // The private block: calendar and inbox, only when the message is about them
 // or it's the morning briefing, and only while the email kill switch is on.
 // A connection failure becomes a note, not an error.
@@ -160,6 +188,21 @@ async function privateContext(text: string, briefing: boolean, emit: Emit): Prom
     } catch (err) {
       console.error("inbox read failed", err);
       emit({ type: "notice", text: `Couldn't read your email: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }
+  const search = mailConfigured() && !briefing ? await searchTerms(text) : undefined;
+  if (search) {
+    try {
+      const hits = await searchMailbox(search.terms, search.days);
+      items += hits.length;
+      const label = search.terms.map((t) => `"${t}"`).join(", ");
+      emit({ type: "notice", text: `Searched your whole mailbox (last ${search.days} days) for ${label}: ${hits.length} found.` });
+      parts.push(
+        `MAILBOX SEARCH: every folder, last ${search.days} days, for ${label} (newest first, ${hits.length} found)\n${hits.length ? formatInbox(hits, TZ) : "(Nothing matched. Say so plainly and suggest other terms Ricardo could try.)"}`,
+      );
+    } catch (err) {
+      console.error("mailbox search failed", err);
+      emit({ type: "notice", text: `Couldn't search your mailbox: ${err instanceof Error ? err.message : String(err)}` });
     }
   }
   if (!parts.length) return { block: "", items: 0 };

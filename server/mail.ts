@@ -25,6 +25,32 @@ export interface InboxMessage {
   date: string;
   unread: boolean;
   snippet: string;
+  // Set on search results, which can come from any folder.
+  folder?: string;
+}
+
+// Headers plus a text snippet for each uid, oldest first. Only the first
+// 32 KB of each message: enough for a snippet, without the attachments.
+async function fetchMessages(client: ImapFlow, uids: number[], snippet: number, folder?: string): Promise<InboxMessage[]> {
+  const out: InboxMessage[] = [];
+  if (!uids.length) return out;
+  for await (const msg of client.fetch(uids, { uid: true, flags: true, envelope: true, source: { maxLength: 32_768 } }, { uid: true })) {
+    const parsed = msg.source ? await simpleParser(msg.source).catch(() => undefined) : undefined;
+    const fromObj = msg.envelope?.from?.[0];
+    const text = (parsed?.text ?? "").replace(/\s+/g, " ").trim();
+    out.push({
+      uid: msg.uid,
+      messageId: msg.envelope?.messageId ?? "",
+      from: fromObj?.name || fromObj?.address || "unknown",
+      fromAddress: fromObj?.address ?? "",
+      subject: msg.envelope?.subject ?? "(no subject)",
+      date: new Date(msg.envelope?.date ?? Date.now()).toISOString(),
+      unread: !msg.flags?.has("\\Seen"),
+      snippet: text.slice(0, snippet),
+      folder,
+    });
+  }
+  return out;
 }
 
 function imap() {
@@ -64,25 +90,7 @@ export async function recentInbox(limit = 40, days = 3): Promise<InboxMessage[]>
       const uids = (await client.search({ since }, { uid: true })) || [];
       const pick = uids.slice(-limit);
       if (!pick.length) return [];
-      const out: InboxMessage[] = [];
-      // Only the first 32 KB of each message: enough for headers and a snippet,
-      // without pulling down attachments.
-      for await (const msg of client.fetch(pick, { uid: true, flags: true, envelope: true, source: { maxLength: 32_768 } }, { uid: true })) {
-        const parsed = msg.source ? await simpleParser(msg.source).catch(() => undefined) : undefined;
-        const fromObj = msg.envelope?.from?.[0];
-        const text = (parsed?.text ?? "").replace(/\s+/g, " ").trim();
-        out.push({
-          uid: msg.uid,
-          messageId: msg.envelope?.messageId ?? "",
-          from: fromObj?.name || fromObj?.address || "unknown",
-          fromAddress: fromObj?.address ?? "",
-          subject: msg.envelope?.subject ?? "(no subject)",
-          date: new Date(msg.envelope?.date ?? Date.now()).toISOString(),
-          unread: !msg.flags?.has("\\Seen"),
-          snippet: text.slice(0, 200),
-        });
-      }
-      return out.reverse();
+      return (await fetchMessages(client, pick, 200)).reverse();
     } finally {
       lock.release();
     }
@@ -91,12 +99,47 @@ export async function recentInbox(limit = 40, days = 3): Promise<InboxMessage[]>
   return items;
 }
 
+// Searches the whole mailbox (every folder but Drafts, Junk and Trash
+// included, since a missed email often sits in spam) for messages whose
+// headers or text contain any of the terms. Newest first, with longer
+// snippets than the inbox view because Ricardo is after specific details.
+export async function searchMailbox(terms: string[], days = 180, limit = 25): Promise<InboxMessage[]> {
+  const clean = [...new Set(terms.map((t) => t.trim()).filter((t) => t.length > 1))].slice(0, 6);
+  if (!clean.length) return [];
+  if (isMock()) {
+    const hit = (m: InboxMessage) => clean.some((t) => `${m.from} ${m.fromAddress} ${m.subject} ${m.snippet}`.toLowerCase().includes(t.toLowerCase()));
+    return MOCK_INBOX.filter(hit).map((m) => ({ ...m, folder: "INBOX" }));
+  }
+  if (!mailConfigured()) return [];
+  return withImap(async (client) => {
+    const folders = (await client.list()).filter(
+      (f) => f.specialUse !== "\\Drafts" && !f.flags.has("\\Noselect") && !/^(inbox[./])?drafts$/i.test(f.path),
+    );
+    const since = new Date(Date.now() - days * 86_400_000);
+    const query = clean.length === 1 ? { since, text: clean[0] } : { since, or: clean.map((text) => ({ text })) };
+    const found: InboxMessage[] = [];
+    for (const f of folders.slice(0, 30)) {
+      const lock = await client.getMailboxLock(f.path).catch(() => undefined);
+      if (!lock) continue;
+      try {
+        const uids = (await client.search(query, { uid: true })) || [];
+        found.push(...(await fetchMessages(client, uids.slice(-limit), 600, f.path)));
+      } catch (err) {
+        console.error(`mail search in ${f.path} failed`, err);
+      } finally {
+        lock.release();
+      }
+    }
+    return found.sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
+  });
+}
+
 export function formatInbox(items: InboxMessage[], tz: string): string {
   if (!items.length) return "(No messages in the last few days.)";
   return items
     .map((m) => {
       const when = new Date(m.date).toLocaleString("en-US", { timeZone: tz, dateStyle: "medium", timeStyle: "short" });
-      return `- ${m.unread ? "[unread] " : ""}${when}, from ${m.from} <${m.fromAddress}>, subject "${m.subject}" [message-id ${m.messageId}]: ${m.snippet}`;
+      return `- ${m.unread ? "[unread] " : ""}${m.folder && m.folder !== "INBOX" ? `[in ${m.folder}] ` : ""}${when}, from ${m.from} <${m.fromAddress}>, subject "${m.subject}" [message-id ${m.messageId}]: ${m.snippet}`;
     })
     .join("\n");
 }

@@ -33,6 +33,10 @@ Open http://localhost:5180. `SPHERE_MOCK=1` gives canned replies with no API cal
 3. Fill in `DATABASE_URL`, `SPHERE_PASSWORD` and each provider key you have. `SESSION_SECRET` is generated for you.
 4. A seat whose provider key is missing shows as "Not connected" and is skipped; add the key later and it comes online.
 
+## Mailbox search
+
+Ask "find the email about X" and the engine turns it into search terms; Sphere then searches every folder of the mailbox (spam included, drafts excluded) for the last 180 days by default, and hands up to 25 matches with longer snippets to the email seats. It follows every email rule below: private turn, email seats only, logged, stopped by the kill switch.
+
 ## Email rules
 
 Ricardo's inbox is confidential, so Sphere enforces these rules in code:
