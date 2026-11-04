@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "./db.js";
-import { anthropicClient, complete, isMock, isProviderReady } from "./providers.js";
+import { complete } from "./providers.js";
 import { listSeats, setChair, trackRecords, type SeatView, type TrackRecord } from "./seats.js";
 import {
-  COORDINATOR_MODEL,
   extractMemory,
   formatMemory,
   formatTranscript,
@@ -13,6 +11,7 @@ import {
   recentTranscript,
   type MemoryItem,
 } from "./context.js";
+import { engineJSON } from "./engine.js";
 import { DRAFT_FORMAT, extractDrafts, storeDrafts, type EmailDraft } from "./drafts.js";
 import { formatInbox, mailConfigured, recentInbox } from "./mail.js";
 import { calendarConfigured, formatEvents, upcomingEvents } from "./calendar.js";
@@ -76,30 +75,15 @@ const Routing = z.object({
 // to Ricardo; the chair always has the last word.
 async function route(text: string, seats: SeatView[], transcript: string): Promise<{ seats: string[]; reason: string }> {
   const candidates = seats.filter((s) => !s.is_chair && s.enabled);
-  if (!isMock() && isProviderReady("anthropic")) {
-    try {
-      const roster = candidates.map((s) => `- ${s.id}: ${s.name}, ${s.title}. ${s.role_card}`).join("\n");
-      const response = await anthropicClient().messages.parse({
-        model: COORDINATOR_MODEL,
-        max_tokens: 2000,
-        output_config: { format: zodOutputFormat(Routing), effort: "low" },
-        system:
-          "You route messages on Ricardo's AI team. The chair always answers; you decide which OTHER seats should contribute first. Pick only seats whose role clearly adds something: usually zero to two. Small talk, simple questions and follow-ups the chair can handle need none. Facts, prices, companies or regulations need the researcher. Anything happening right now needs the pulse seat. Requests for ideas, critique or a second opinion need the generalist or the Muse seat. Long documents, reports, spreadsheets or detailed analysis need the analyst. Return seat ids from the roster only, and a reason of at most 15 words.",
-        messages: [
-          {
-            role: "user",
-            content: `ROSTER\n${roster}\n\nRECENT CONVERSATION\n${transcript.slice(-4000)}\n\nNEW MESSAGE FROM RICARDO\n${text}`,
-          },
-        ],
-      });
-      const out = response.parsed_output;
-      if (out) {
-        const valid = out.seats.filter((id) => candidates.some((s) => s.id === id));
-        return { seats: valid.slice(0, 3), reason: out.reason };
-      }
-    } catch (err) {
-      console.error("coordinator failed, using keyword routing", err);
-    }
+  const roster = candidates.map((s) => `- ${s.id}: ${s.name}, ${s.title}. ${s.role_card}`).join("\n");
+  const out = await engineJSON(
+    Routing,
+    "You route messages on Ricardo's AI team. The chair always answers; you decide which OTHER seats should contribute first. Pick only seats whose role clearly adds something: usually zero to two. Small talk, simple questions and follow-ups the chair can handle need none. Facts, prices, companies or regulations need the researcher. Anything happening right now needs the pulse seat. Requests for ideas, critique or a second opinion need the generalist or the Muse seat. Long documents, reports, spreadsheets or detailed analysis need the analyst. Return seat ids from the roster only, and a reason of at most 15 words.",
+    `ROSTER\n${roster}\n\nRECENT CONVERSATION\n${transcript.slice(-4000)}\n\nNEW MESSAGE FROM RICARDO\n${text}`,
+  );
+  if (out) {
+    const valid = out.data.seats.filter((id) => candidates.some((s) => s.id === id));
+    return { seats: valid.slice(0, 3), reason: out.data.reason };
   }
   return keywordRoute(text, candidates);
 }
@@ -466,7 +450,6 @@ async function judgeBids(ctx: TurnContext, bids: Bid[]): Promise<{ seatId: strin
     seatId: ranked[0].seatId,
     reason: `Highest bid score: confidence ${ranked[0].confidence}, track record ${Math.round(ranked[0].record * 100)}%.`,
   };
-  if (isMock() || !isProviderReady("anthropic")) return fallback;
   const seatName = (id: string) => ctx.seats.find((s) => s.id === id)?.name ?? id;
   const roster = ctx.seats
     .filter((s) => bids.some((b) => b.seatId === s.id))
@@ -478,20 +461,8 @@ async function judgeBids(ctx: TurnContext, bids: Bid[]): Promise<{ seatId: strin
         `- ${b.seatId} (${seatName(b.seatId)}): confidence ${b.confidence}, track record ${Math.round(b.record * 100)}% over ${b.rated} rated answers\n  PLAN: ${b.plan}\n  WHY ME: ${b.why}`,
     )
     .join("\n");
-  try {
-    const response = await anthropicClient().messages.parse({
-      model: COORDINATOR_MODEL,
-      max_tokens: 2000,
-      output_config: { format: zodOutputFormat(Verdict), effort: "low" },
-      system:
-        "You award a task on Ricardo's AI team to one seat after the seats have pitched for it. Judge which seat will actually do the task best. Weigh, in order: whether the seat's role and abilities fit the task (live web research needs the researcher; current events need the pulse seat; long documents need the analyst); whether teammates' bids point to another seat; the quality of the plan; the seat's track record when it has enough ratings. Self-reported confidence counts least, because models overrate themselves. Return the winning seat id from the list and a reason of at most 25 words that Ricardo will read.",
-      messages: [{ role: "user", content: `TASK\n${ctx.text}\n\nSEATS\n${roster}\n\nBIDS\n${table}` }],
-    });
-    const out = response.parsed_output;
-    if (out && bids.some((b) => b.seatId === out.seatId)) return out;
-  } catch (err) {
-    console.error("bid judging failed, using scores", err);
-  }
+  const out = await engineJSON(Verdict, "You award a task on Ricardo's AI team to one seat after the seats have pitched for it. Judge which seat will actually do the task best. Weigh, in order: whether the seat's role and abilities fit the task (live web research needs the researcher; current events need the pulse seat; long documents need the analyst); whether teammates' bids point to another seat; the quality of the plan; the seat's track record when it has enough ratings. Self-reported confidence counts least, because models overrate themselves. Return the winning seat id from the list and a reason of at most 25 words that Ricardo will read.", `TASK\n${ctx.text}\n\nSEATS\n${roster}\n\nBIDS\n${table}`);
+  if (out && bids.some((b) => b.seatId === out.data.seatId)) return out.data;
   return fallback;
 }
 

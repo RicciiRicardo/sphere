@@ -1,7 +1,6 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { db } from "./db.js";
-import { anthropicClient, isMock, isProviderReady } from "./providers.js";
+import { engineJSON } from "./engine.js";
 
 // The context engine: one shared store every seat reads from, filled from
 // conversations (automatically) and from the memory panel (by hand).
@@ -23,7 +22,6 @@ export interface TranscriptLine {
   content: string;
 }
 
-export const COORDINATOR_MODEL = "claude-haiku-5-5";
 
 export async function listMemory(): Promise<MemoryItem[]> {
   const { rows } = await db.query<MemoryItem>("SELECT * FROM memory ORDER BY updated_at DESC");
@@ -128,23 +126,15 @@ const Extracted = z.object({
 // After each turn, a small model pulls out anything worth remembering. New
 // items only: exact duplicates of what's stored are skipped.
 export async function extractMemory(userText: string, teamReply: string, source: string) {
-  if (isMock() || !isProviderReady("anthropic")) return [];
   const existing = await listMemory();
   const known = existing.slice(0, 80).map((m) => `- (${m.kind}) ${m.content}`).join("\n");
-  const response = await anthropicClient().messages.parse({
-    model: COORDINATOR_MODEL,
-    max_tokens: 4000,
-    output_config: { format: zodOutputFormat(Extracted), effort: "low" },
-    system:
-      "You maintain the shared memory for Ricardo's AI team. From the exchange below, extract only durable facts worth remembering across days: people and organizations (who they are, relationships), projects in flight, commitments (who promised what, by when), decisions Ricardo made, and Ricardo's preferences. A preference or decision counts only if Ricardo stated it himself in what he said; the team's suggestions and recommendations are not his preferences or decisions, so never record them as such. Never record personal financial, banking, loan, credit card, medical, legal-case or password details, even when they appear in his email. Skip small talk, one-off questions, and anything already in the known list. Write each item as one self-contained sentence. Return an empty list when nothing qualifies.",
-    messages: [
-      {
-        role: "user",
-        content: `KNOWN MEMORY\n${known || "(none)"}\n\nRICARDO SAID\n${userText}\n\nTEAM REPLIED\n${teamReply}`,
-      },
-    ],
-  });
-  const items = response.parsed_output?.items ?? [];
+  const result = await engineJSON(
+    Extracted,
+    "You maintain the shared memory for Ricardo's AI team. From the exchange below, extract only durable facts worth remembering across days: people and organizations (who they are, relationships), projects in flight, commitments (who promised what, by when), decisions Ricardo made, and Ricardo's preferences. A preference or decision counts only if Ricardo stated it himself in what he said; the team's suggestions and recommendations are not his preferences or decisions, so never record them as such. Never record personal financial, banking, loan, credit card, medical, legal-case or password details, even when they appear in his email. Skip small talk, one-off questions, and anything already in the known list. Write each item as one self-contained sentence. Return an empty list when nothing qualifies.",
+    `KNOWN MEMORY\n${known || "(none)"}\n\nRICARDO SAID\n${userText}\n\nTEAM REPLIED\n${teamReply}`,
+    4000,
+  );
+  const items = result?.data.items ?? [];
   const seen = new Set(existing.map((m) => m.content.toLowerCase()));
   const added: MemoryItem[] = [];
   for (const item of items) {

@@ -614,6 +614,10 @@ function ConnectionsBox({ connections }: { connections: Connections }) {
   return (
     <div className="connections">
       <h2>Connections</h2>
+      <p className="conn-line" title="Routes messages, judges Pitch bids and keeps the team memory">
+        <span className="dot ok" />
+        Engine: {connections.engine.label}
+      </p>
       <p className="conn-line">
         <span className={`dot ${connections.mail.configured ? "ok" : "off"}`} />
         Email: {connections.mail.configured ? connections.mail.account : "not set up"}

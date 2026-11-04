@@ -13,6 +13,7 @@ Phase 1 of the [Sphere concept](https://claude.ai/artifact/WivxvxcFcNA8GFqFLiS2c
 - **Pitch.** "Who wants this?" (or the Pitch button): every seat bids with a plan, why it fits, and a confidence score. The coordinator awards the task on fit, plan, teammates' views and track record (self-reported confidence counts least), the winner does it, and "Give it to…" hands it to another seat instead.
 - **Track record.** 👍/👎 on answers. Each seat's approval rate (smoothed, starting at 50%) shows in the team list and weighs its Pitch bids.
 - **Email and calendar.** Reads the migroupco.com inbox (IMAP) and iCloud Calendar (CalDAV) when a message is about email, meetings or the schedule, and always for the morning briefing. When you ask for an email, the team writes it as a draft card you can edit, **Save to Drafts** (it lands in the mailbox's own Drafts folder), or **Send**. Nothing is sent without your tap and a confirmation. Email text is treated as information, never as instructions.
+- **Engine on Muse.** The behind-the-scenes engine (routing, judging Pitch bids, keeping the shared memory) runs on Meta's Muse Spark when `META_API_KEY` is set, with Claude Haiku as an automatic fallback. `SPHERE_ENGINE=anthropic` switches it back; `SPHERE_ENGINE_MODEL` overrides the Muse model.
 - **Morning briefing.** Say "good morning" or tap the button.
 - **Pluggable seats.** Add a seat for any model whose provider is supported, edit role cards and model IDs, or bench a seat.
 

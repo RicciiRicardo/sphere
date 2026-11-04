@@ -9,6 +9,7 @@ import { runTurn, type TeamEvent, type TurnMode } from "./team.js";
 import { editDraft, getDraft, listDrafts, setDraftStatus } from "./drafts.js";
 import { mailAccount, mailConfigured, recentInbox, saveDraft, sendEmail } from "./mail.js";
 import { calendarConfigured, upcomingEvents } from "./calendar.js";
+import { engineInfo } from "./engine.js";
 
 const PROD = process.env.NODE_ENV === "production";
 const PORT = Number(process.env.PORT ?? 5180);
@@ -87,6 +88,7 @@ app.get("/api/state", async (_req, res) => {
   const connections = {
     mail: { configured: mailConfigured(), account: mailConfigured() ? mailAccount() : "" },
     calendar: { configured: calendarConfigured() },
+    engine: engineInfo(),
   };
   res.json({ seats, memory, messages: messages.rows, feedback, drafts, connections, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
 });
