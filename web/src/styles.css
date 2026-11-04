@@ -402,6 +402,30 @@ h3 {
   font-size: 13px;
   color: var(--muted);
 }
+.private-chip {
+  justify-self: end;
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.access-log {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  font-size: 13px;
+  display: grid;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+button.danger-solid {
+  background: var(--danger);
+}
+.connections .row {
+  margin: 6px 0;
+}
 .connections {
   border-bottom: 1px solid var(--line);
   padding-bottom: 12px;

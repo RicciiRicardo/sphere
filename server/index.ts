@@ -4,12 +4,13 @@ import path from "node:path";
 import { db, migrate } from "./db.js";
 import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
 import { addSeat, listFeedback, listSeats, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
-import { addMemory, deleteMemory, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
+import { addMemory, backfillPrivate, deleteMemory, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
 import { runTurn, type TeamEvent, type TurnMode } from "./team.js";
 import { editDraft, getDraft, listDrafts, setDraftStatus } from "./drafts.js";
 import { mailAccount, mailConfigured, recentInbox, saveDraft, sendEmail } from "./mail.js";
 import { calendarConfigured, upcomingEvents } from "./calendar.js";
 import { engineInfo } from "./engine.js";
+import { emailEnabled, recentEmailAccess, setSetting } from "./settings.js";
 
 const PROD = process.env.NODE_ENV === "production";
 const PORT = Number(process.env.PORT ?? 5180);
@@ -76,7 +77,7 @@ app.use("/api", (req, res, next) => {
 });
 
 app.get("/api/state", async (_req, res) => {
-  const [seats, memory, messages, feedback, drafts] = await Promise.all([
+  const [seats, memory, messages, feedback, drafts, emailOn, emailLog] = await Promise.all([
     listSeats(),
     listMemory(),
     db.query(
@@ -84,13 +85,15 @@ app.get("/api/state", async (_req, res) => {
     ),
     listFeedback(),
     listDrafts(),
+    emailEnabled(),
+    recentEmailAccess(),
   ]);
   const connections = {
-    mail: { configured: mailConfigured(), account: mailConfigured() ? mailAccount() : "" },
+    mail: { configured: mailConfigured(), account: mailConfigured() ? mailAccount() : "", enabled: emailOn },
     calendar: { configured: calendarConfigured() },
     engine: engineInfo(),
   };
-  res.json({ seats, memory, messages: messages.rows, feedback, drafts, connections, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
+  res.json({ seats, memory, messages: messages.rows, feedback, drafts, connections, emailLog, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
 });
 
 // One turn of conversation, streamed back as server-sent events.
@@ -173,6 +176,14 @@ app.get("/api/connections/test", async (_req, res) => {
   res.json(result);
 });
 
+// The email kill switch: off means no seat reads the inbox and no draft can
+// be saved or sent, until it's turned back on.
+app.post("/api/email/enabled", async (req, res) => {
+  const enabled = req.body?.enabled === true;
+  await setSetting("email_enabled", enabled ? "true" : "false");
+  res.json({ enabled });
+});
+
 // Email drafts the team proposed. Nothing is sent without Ricardo tapping Send.
 app.put("/api/drafts/:id", async (req, res) => {
   const { to, subject, body } = req.body ?? {};
@@ -198,6 +209,10 @@ app.post("/api/drafts/:id/:action", async (req, res) => {
   }
   if (!mailConfigured()) {
     res.status(400).json({ error: "Email isn't connected yet." });
+    return;
+  }
+  if (!(await emailEnabled())) {
+    res.status(400).json({ error: "Email access is switched off. Turn it back on in Connections first." });
     return;
   }
   if (draft.status === "sent" || draft.status === "discarded") {
@@ -227,8 +242,15 @@ app.post("/api/drafts/:id/:action", async (req, res) => {
 });
 
 app.put("/api/seats/:id", async (req, res) => {
-  const { name, title, model, role_card, enabled } = req.body ?? {};
-  await updateSeat(req.params.id, { name, title, model, role_card, enabled });
+  const { name, title, model, role_card, enabled, email_access } = req.body ?? {};
+  await updateSeat(req.params.id, {
+    name,
+    title,
+    model,
+    role_card,
+    enabled,
+    email_access: typeof email_access === "boolean" ? email_access : undefined,
+  });
   res.json({ seats: await listSeats() });
 });
 
@@ -300,6 +322,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 async function main() {
   await migrate();
   await seedSeats();
+  await backfillPrivate();
 
   if (PROD) {
     const dir = path.resolve("dist/public");

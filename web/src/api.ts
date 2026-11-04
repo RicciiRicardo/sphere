@@ -13,6 +13,7 @@ export interface Seat {
   ready: boolean;
   record: number;
   rated: number;
+  email_access?: boolean;
 }
 
 export type TurnMode = "auto" | "briefing" | "roundtable" | "pitch";
@@ -40,7 +41,7 @@ export interface EmailDraft {
 }
 
 export interface Connections {
-  mail: { configured: boolean; account: string };
+  mail: { configured: boolean; account: string; enabled: boolean };
   calendar: { configured: boolean };
   engine: { provider: string; model: string; label: string };
 }
@@ -56,6 +57,7 @@ export interface MemoryItem {
   kind: string;
   content: string;
   source: string;
+  private?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -66,6 +68,17 @@ export interface StoredMessage {
   speaker: string;
   kind: string;
   content: string;
+  private?: boolean;
+  created_at: string;
+}
+
+export interface EmailAccessEntry {
+  id: number;
+  turn_id: string;
+  seat_id: string;
+  provider: string;
+  model: string;
+  items: number;
   created_at: string;
 }
 
@@ -76,6 +89,7 @@ export interface AppState {
   feedback: Feedback[];
   drafts: EmailDraft[];
   connections: Connections;
+  emailLog: EmailAccessEntry[];
   mock: boolean;
   memoryKinds: string[];
   providers: Provider[];
@@ -94,6 +108,7 @@ export type TeamEvent =
   | { type: "notice"; text: string }
   | { type: "memory"; added: MemoryItem[] }
   | { type: "draft"; draft: EmailDraft }
+  | { type: "private"; seats: string[] }
   | { type: "done" };
 
 export class AuthError extends Error {}
@@ -123,6 +138,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ turnId, seatId, verdict }),
     }),
+  setEmailEnabled: (enabled: boolean) =>
+    call<{ enabled: boolean }>("/api/email/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
   testConnections: () => call<{ mail: string; calendar: string }>("/api/connections/test"),
   editDraft: (id: number, to: string, subject: string, body: string) =>
     call<{ drafts: EmailDraft[] }>(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ to, subject, body }) }),
