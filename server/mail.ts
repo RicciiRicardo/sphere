@@ -51,7 +51,9 @@ let inboxCache: { at: number; items: InboxMessage[] } | undefined;
 
 // The most recent messages from the last few days, newest first. Cached for
 // two minutes so one turn's several seats don't each open a mail connection.
-export async function recentInbox(limit = 15, days = 3): Promise<InboxMessage[]> {
+// Ricardo gets 15+ emails a day, so 15 only ever covered today; 40 with
+// shorter snippets reaches back about three days for a similar prompt size.
+export async function recentInbox(limit = 40, days = 3): Promise<InboxMessage[]> {
   if (isMock()) return MOCK_INBOX;
   if (!mailConfigured()) return [];
   if (inboxCache && Date.now() - inboxCache.at < 120_000) return inboxCache.items;
@@ -77,7 +79,7 @@ export async function recentInbox(limit = 15, days = 3): Promise<InboxMessage[]>
           subject: msg.envelope?.subject ?? "(no subject)",
           date: new Date(msg.envelope?.date ?? Date.now()).toISOString(),
           unread: !msg.flags?.has("\\Seen"),
-          snippet: text.slice(0, 300),
+          snippet: text.slice(0, 200),
         });
       }
       return out.reverse();
