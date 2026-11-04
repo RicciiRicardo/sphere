@@ -99,10 +99,14 @@ export async function recentInbox(limit = 40, days = 3): Promise<InboxMessage[]>
   return items;
 }
 
-// Searches the whole mailbox (every folder but Drafts, Junk and Trash
-// included, since a missed email often sits in spam) for messages whose
-// headers or text contain any of the terms. Newest first, with longer
-// snippets than the inbox view because Ricardo is after specific details.
+// Searches the mailbox for messages whose sender or subject contains any of
+// the terms, in every folder but Drafts and Trash (spam included, since a
+// missed email often sits there). The full text is searched too, but only in
+// the inbox and spam: web-host mail servers have no search index, so a text
+// search reads every message and is far too slow across all folders.
+// Newest first, with longer snippets than the inbox view. Stops after about
+// 50 seconds and returns what it found so far; the full-text pass covers
+// the last 45 days.
 export async function searchMailbox(terms: string[], days = 180, limit = 25): Promise<InboxMessage[]> {
   const clean = [...new Set(terms.map((t) => t.trim()).filter((t) => t.length > 1))].slice(0, 6);
   if (!clean.length) return [];
@@ -111,27 +115,50 @@ export async function searchMailbox(terms: string[], days = 180, limit = 25): Pr
     return MOCK_INBOX.filter(hit).map((m) => ({ ...m, folder: "INBOX" }));
   }
   if (!mailConfigured()) return [];
-  return withImap(async (client) => {
+  const deadline = Date.now() + 50_000;
+  const found = new Map<string, InboxMessage>();
+  const since = new Date(Date.now() - days * 86_400_000);
+  // The slow full-text pass only reaches back 45 days.
+  const textSince = new Date(Date.now() - Math.min(days, 45) * 86_400_000);
+  const anyOf = (fields: ("subject" | "from" | "text")[]) => ({
+    since: fields.includes("text") ? textSince : since,
+    or: clean.flatMap((t) => fields.map((f) => ({ [f]: t }))),
+  });
+  const search = withImap(async (client) => {
     const folders = (await client.list()).filter(
-      (f) => f.specialUse !== "\\Drafts" && !f.flags.has("\\Noselect") && !/^(inbox[./])?drafts$/i.test(f.path),
+      (f) =>
+        f.specialUse !== "\\Drafts" &&
+        f.specialUse !== "\\Trash" &&
+        !f.flags.has("\\Noselect") &&
+        !/^(inbox[./])?(drafts|trash|deleted)/i.test(f.path),
     );
-    const since = new Date(Date.now() - days * 86_400_000);
-    const query = clean.length === 1 ? { since, text: clean[0] } : { since, or: clean.map((text) => ({ text })) };
-    const found: InboxMessage[] = [];
+    const isFullText = (f: (typeof folders)[number]) => f.path === "INBOX" || f.specialUse === "\\Junk" || /spam|junk/i.test(f.path);
+    // INBOX first, then spam, then the rest.
+    folders.sort((x, y) => Number(y.path === "INBOX") - Number(x.path === "INBOX") || Number(isFullText(y)) - Number(isFullText(x)));
     for (const f of folders.slice(0, 30)) {
+      if (Date.now() > deadline) break;
       const lock = await client.getMailboxLock(f.path).catch(() => undefined);
       if (!lock) continue;
       try {
-        const uids = (await client.search(query, { uid: true })) || [];
-        found.push(...(await fetchMessages(client, uids.slice(-limit), 600, f.path)));
+        const uids = new Set((await client.search(anyOf(["subject", "from"]), { uid: true })) || []);
+        if (isFullText(f) && Date.now() < deadline) {
+          for (const u of (await client.search(anyOf(["text"]), { uid: true })) || []) uids.add(u);
+        }
+        const pick = [...uids].sort((x, y) => x - y).slice(-limit);
+        for (const m of await fetchMessages(client, pick, 600, f.path)) found.set(`${f.path}:${m.uid}`, m);
       } catch (err) {
         console.error(`mail search in ${f.path} failed`, err);
       } finally {
         lock.release();
       }
     }
-    return found.sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
   });
+  // One IMAP command can't be interrupted, so don't let a slow server hold
+  // the turn: after 75 seconds, answer with whatever was found.
+  let failure: unknown;
+  await Promise.race([search.catch((err) => (failure = err)), new Promise((r) => setTimeout(r, 75_000))]);
+  if (failure && !found.size) throw failure;
+  return [...found.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
 }
 
 export function formatInbox(items: InboxMessage[], tz: string): string {
