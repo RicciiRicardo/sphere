@@ -6,6 +6,7 @@ import {
   type AppState,
   type Bid,
   type Connections,
+  type EmailAccessEntry,
   type EmailDraft,
   type MemoryItem,
   type Provider,
@@ -27,6 +28,7 @@ interface Turn {
   notices: string[];
   thinking: string[];
   live: boolean;
+  private?: boolean;
 }
 
 const SEAT_COLORS: Record<string, string> = {
@@ -66,6 +68,7 @@ function turnsFromMessages(messages: StoredMessage[]): Turn[] {
       t = { id: m.turn_id, userText: "", replies: [], bids: [], notices: [], thinking: [], live: false };
       turns.set(m.turn_id, t);
     }
+    if (m.private) t.private = true;
     if (m.kind === "user") t.userText = m.content;
     else if (m.kind === "routing") {
       try {
@@ -108,6 +111,8 @@ function applyEvent(turn: Turn, e: TeamEvent): Turn {
     }
     case "winner":
       return { ...turn, winner: { seatId: e.seatId, text: e.text } };
+    case "private":
+      return { ...turn, private: true };
     case "thinking":
       return { ...turn, thinking: [...turn.thinking, e.seatId] };
     case "seat":
@@ -331,7 +336,10 @@ export function App() {
                   {s.name}
                   {s.is_chair && <span className="badge">Chair</span>}
                 </span>
-                <span className="seat-title">{s.title}</span>
+                <span className="seat-title">
+                  {s.title}
+                  {s.email_access && <span title="May read your email"> · ✉️</span>}
+                </span>
                 {s.rated > 0 && (
                   <span className="seat-title">
                     Track record {Math.round(s.record * 100)}% · {s.rated} rated
@@ -382,7 +390,14 @@ export function App() {
       </main>
 
       <aside className="memory">
-        <ConnectionsBox connections={state.connections} />
+        <ConnectionsBox
+          connections={state.connections}
+          log={state.emailLog}
+          seatName={(id) => seatById[id]?.name ?? id}
+          onToggle={(enabled) =>
+            setState((s) => (s ? { ...s, connections: { ...s.connections, mail: { ...s.connections.mail, enabled } } } : s))
+          }
+        />
         <MemoryPanel
           memory={state.memory}
           kinds={state.memoryKinds}
@@ -513,6 +528,11 @@ function TurnView({
   return (
     <section className="turn">
       <div className="you">{turn.userText}</div>
+      {turn.private && (
+        <div className="private-chip" title="This used your email. Only seats allowed to read email worked on it, and it stays hidden from the others.">
+          🔒 Private: used your email
+        </div>
+      )}
       {turn.routing && (
         <div className="routing">
           {turn.routing.seats.length ? `${turn.routing.seats.map(name).join(", ")}: ` : ""}
@@ -608,9 +628,31 @@ function TurnView({
   );
 }
 
-function ConnectionsBox({ connections }: { connections: Connections }) {
+function ConnectionsBox({
+  connections,
+  log,
+  seatName,
+  onToggle,
+}: {
+  connections: Connections;
+  log: EmailAccessEntry[];
+  seatName: (id: string) => string;
+  onToggle: (enabled: boolean) => void;
+}) {
   const [result, setResult] = useState<{ mail: string; calendar: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [showLog, setShowLog] = useState(false);
+  const toggle = async () => {
+    const next = !connections.mail.enabled;
+    if (!next && !confirm("Switch off email access? No seat will read your inbox, and drafts can't be saved or sent, until you switch it back on.")) return;
+    setSwitching(true);
+    try {
+      onToggle((await api.setEmailEnabled(next)).enabled);
+    } finally {
+      setSwitching(false);
+    }
+  };
   return (
     <div className="connections">
       <h2>Connections</h2>
@@ -619,9 +661,31 @@ function ConnectionsBox({ connections }: { connections: Connections }) {
         Engine: {connections.engine.label}
       </p>
       <p className="conn-line">
-        <span className={`dot ${connections.mail.configured ? "ok" : "off"}`} />
+        <span className={`dot ${connections.mail.configured && connections.mail.enabled ? "ok" : "off"}`} />
         Email: {connections.mail.configured ? connections.mail.account : "not set up"}
+        {connections.mail.configured && !connections.mail.enabled && <strong> (switched off)</strong>}
       </p>
+      {connections.mail.configured && (
+        <div className="row">
+          <button className={`small ${connections.mail.enabled ? "danger-solid" : ""}`} disabled={switching} onClick={toggle}>
+            {connections.mail.enabled ? "Switch email off" : "Switch email on"}
+          </button>
+          <button className="ghost small" onClick={() => setShowLog(!showLog)}>
+            {showLog ? "Hide access log" : `Access log (${log.length})`}
+          </button>
+        </div>
+      )}
+      {showLog && (
+        <ul className="access-log">
+          {log.length === 0 && <li className="muted">No seat has read your email yet.</li>}
+          {log.map((e) => (
+            <li key={e.id}>
+              {seatName(e.seat_id)} <span className="muted">({e.model})</span> read {e.items} items ·{" "}
+              <span className="muted">{new Date(e.created_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="conn-line">
         <span className={`dot ${connections.calendar.configured ? "ok" : "off"}`} />
         Calendar: {connections.calendar.configured ? "iCloud" : "not set up"}
@@ -799,7 +863,10 @@ function MemoryPanel({ memory, kinds, onChange }: { memory: MemoryItem[]; kinds:
                 </div>
               ) : (
                 <div key={m.id} className="memory-item">
-                  <p>{m.content}</p>
+                  <p>
+                    {m.private && <span title="From your email: only seats allowed to read email see this">🔒 </span>}
+                    {m.content}
+                  </p>
                   <div className="row">
                     <span className="muted">{m.source}</span>
                     <button
@@ -844,6 +911,7 @@ function SeatEditor({
     model: seat?.model ?? "",
     role_card: seat?.role_card ?? "",
     enabled: seat?.enabled ?? true,
+    email_access: seat?.email_access ?? false,
   });
   const [err, setErr] = useState("");
   const [models, setModels] = useState<{ list: string[]; note: string }>({ list: [], note: "" });
@@ -921,6 +989,12 @@ function SeatEditor({
           <label className="check">
             <input type="checkbox" checked={form.enabled} onChange={(e) => set("enabled", e.target.checked)} />
             On the team (untick to bench this seat)
+          </label>
+        )}
+        {seat && (
+          <label className="check">
+            <input type="checkbox" checked={form.email_access} onChange={(e) => set("email_access", e.target.checked)} />
+            May read your email (and private conversations and memory that came from it)
           </label>
         )}
         {err && <p className="error">{err}</p>}

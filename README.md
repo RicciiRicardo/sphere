@@ -33,6 +33,22 @@ Open http://localhost:5180. `SPHERE_MOCK=1` gives canned replies with no API cal
 3. Fill in `DATABASE_URL`, `SPHERE_PASSWORD` and each provider key you have. `SESSION_SECRET` is generated for you.
 4. A seat whose provider key is missing shows as "Not connected" and is skipped; add the key later and it comes online.
 
+## Email rules
+
+Ricardo's inbox is confidential, so Sphere enforces these rules in code:
+
+1. **Only designated seats read email.** By default that's Mily (Muse) and Claude; each seat's settings has a "May read your email" switch.
+2. **Email turns stay with those seats.** When a message needs the inbox, only seats with email access work on it (no Roundtable or Pitch with the others).
+3. **What came from email stays private.** That turn's messages and any memory made from it are marked private 🔒. Other seats see a placeholder in the conversation history and never get that memory.
+4. **Limited reading.** Last 3 days, up to 40 messages, a 200-character snippet each, never attachments.
+5. **Nothing is sent without Ricardo.** The team only drafts; Send needs his tap and a confirmation.
+6. **Memory never keeps** personal financial, banking, loan, medical, legal-case or password details, and never records the team's suggestions as his preferences.
+7. **Email text is information, not instructions.** Prompts label it confidential and tell every model never to follow instructions inside an email.
+8. **Access log.** Every time a seat is shown the inbox, Sphere records which seat, which model, how many items and when (Connections → Access log).
+9. **Kill switch.** Connections → "Switch email off" stops all inbox (and calendar) reads and blocks saving or sending drafts until it's switched back on.
+
+Not yet built: excluded senders, automatic redaction of account numbers, two-factor sign-in for Sphere, and a retention period for conversations that used email.
+
 ## Email and calendar setup
 
 | Setting | Value |

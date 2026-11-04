@@ -11,6 +11,8 @@ export interface Seat {
   enabled: boolean;
   is_chair: boolean;
   sort: number;
+  // May this seat see Ricardo's inbox (and anything private that came from it)?
+  email_access?: boolean;
 }
 
 export interface SeatView extends Seat {
@@ -132,11 +134,15 @@ const DEFAULT_SEATS: Seat[] = [
 // Ricardo later removes stays removed.
 const LATER_SEATS: Record<string, string> = { "seat:gemini": "gemini" };
 
+// Ricardo's rule (Nov 4, 2026): only Mily (the Muse seat) and Claude may read
+// his email. Applied once to existing installs; editable per seat afterwards.
+const EMAIL_READERS = ["muse", "claude"];
+
 async function insertSeat(s: Seat) {
   await db.query(
-    `INSERT INTO seats (id, name, title, provider, model, role_card, enabled, is_chair, sort)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
-    [s.id, s.name, s.title, s.provider, s.model, s.role_card, s.enabled, s.is_chair, s.sort],
+    `INSERT INTO seats (id, name, title, provider, model, role_card, enabled, is_chair, sort, email_access)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING`,
+    [s.id, s.name, s.title, s.provider, s.model, s.role_card, s.enabled, s.is_chair, s.sort, EMAIL_READERS.includes(s.id)],
   );
 }
 
@@ -150,6 +156,11 @@ export async function seedSeats() {
     const seat = DEFAULT_SEATS.find((s) => s.id === id);
     if (seat && !fresh) await insertSeat(seat);
     await db.query("INSERT INTO applied_seeds (key) VALUES ($1) ON CONFLICT DO NOTHING", [key]);
+  }
+  const rule = await db.query("SELECT 1 FROM applied_seeds WHERE key = 'email-access:v1'");
+  if (!rule.rows.length) {
+    await db.query("UPDATE seats SET email_access = (id = ANY($1))", [EMAIL_READERS]);
+    await db.query("INSERT INTO applied_seeds (key) VALUES ('email-access:v1') ON CONFLICT DO NOTHING");
   }
 }
 
@@ -171,9 +182,9 @@ export async function setChair(id: string) {
 
 export async function updateSeat(
   id: string,
-  patch: Partial<Pick<Seat, "name" | "title" | "model" | "role_card" | "enabled">>,
+  patch: Partial<Pick<Seat, "name" | "title" | "model" | "role_card" | "enabled" | "email_access">>,
 ) {
-  const editable = ["name", "title", "model", "role_card", "enabled"];
+  const editable = ["name", "title", "model", "role_card", "enabled", "email_access"];
   const fields = Object.entries(patch).filter(([k, v]) => editable.includes(k) && v !== undefined);
   if (!fields.length) return;
   const sets = fields.map(([k], i) => `${k} = $${i + 2}`).join(", ");

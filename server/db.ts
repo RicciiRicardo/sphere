@@ -104,5 +104,28 @@ export async function migrate() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    -- Email rules: only seats with email_access see the inbox, and anything
+    -- that came out of the inbox (the turn's messages, memory made from it)
+    -- is marked private so the other seats never see it later either.
+    ALTER TABLE seats ADD COLUMN IF NOT EXISTS email_access BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE memory ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT FALSE;
+
+    -- Which seat was shown Ricardo's email, when, and how much.
+    CREATE TABLE IF NOT EXISTS email_access_log (
+      id SERIAL PRIMARY KEY,
+      turn_id TEXT NOT NULL,
+      seat_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      items INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 }
