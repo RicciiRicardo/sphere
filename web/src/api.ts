@@ -150,6 +150,8 @@ export const api = {
     call<{ memory: MemoryItem[] }>("/api/memory", { method: "POST", body: JSON.stringify({ kind, content }) }),
   updateMemory: (id: number, kind: string, content: string) =>
     call<{ memory: MemoryItem[] }>(`/api/memory/${id}`, { method: "PUT", body: JSON.stringify({ kind, content }) }),
+  setMemoryPrivate: (id: number, isPrivate: boolean) =>
+    call<{ memory: MemoryItem[] }>(`/api/memory/${id}/private`, { method: "POST", body: JSON.stringify({ private: isPrivate }) }),
   deleteMemory: (id: number) => call<{ memory: MemoryItem[] }>(`/api/memory/${id}`, { method: "DELETE" }),
 };
 

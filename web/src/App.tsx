@@ -878,6 +878,20 @@ function MemoryPanel({ memory, kinds, onChange }: { memory: MemoryItem[]; kinds:
                     >
                       Edit
                     </button>
+                    <button
+                      className="ghost small"
+                      title={
+                        m.private
+                          ? "Let every seat see this, not just the ones allowed to read your email"
+                          : "Only seats allowed to read your email will see this"
+                      }
+                      onClick={async () => {
+                        if (m.private && !confirm("Unlock this? Every seat on the team (including Grok, ChatGPT, Gemini and Perplexity) will be able to see it.")) return;
+                        onChange((await api.setMemoryPrivate(m.id, !m.private)).memory);
+                      }}
+                    >
+                      {m.private ? "Unlock" : "Lock"}
+                    </button>
                     <button className="ghost small" onClick={async () => onChange((await api.deleteMemory(m.id)).memory)}>
                       Remove
                     </button>
