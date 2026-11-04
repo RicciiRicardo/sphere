@@ -42,6 +42,7 @@ export interface EmailDraft {
 export interface Connections {
   mail: { configured: boolean; account: string };
   calendar: { configured: boolean };
+  engine: { provider: string; model: string; label: string };
 }
 
 export interface Feedback {

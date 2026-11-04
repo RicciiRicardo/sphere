@@ -30,7 +30,7 @@ export function anthropicClient() {
 }
 
 const openaiClients = new Map<Provider, OpenAI>();
-function openaiClient(provider: Exclude<Provider, "anthropic">) {
+export function openaiClient(provider: Exclude<Provider, "anthropic">) {
   let client = openaiClients.get(provider);
   if (!client) {
     const cfg = OPENAI_COMPATIBLE[provider];
