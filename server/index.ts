@@ -4,7 +4,7 @@ import path from "node:path";
 import { db, migrate } from "./db.js";
 import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
 import { addSeat, listFeedback, listSeats, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
-import { addMemory, backfillPrivate, deleteMemory, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
+import { addMemory, backfillPrivate, deleteMemory, setMemoryPrivate, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
 import { runTurn, type TeamEvent, type TurnMode } from "./team.js";
 import { editDraft, getDraft, listDrafts, setDraftStatus } from "./drafts.js";
 import { mailAccount, mailConfigured, recentInbox, saveDraft, sendEmail } from "./mail.js";
@@ -306,6 +306,15 @@ app.put("/api/memory/:id", async (req, res) => {
     return;
   }
   await updateMemory(Number(req.params.id), kind, String(content));
+  res.json({ memory: await listMemory() });
+});
+
+app.post("/api/memory/:id/private", async (req, res) => {
+  if (typeof req.body?.private !== "boolean") {
+    res.status(400).json({ error: "private must be true or false." });
+    return;
+  }
+  await setMemoryPrivate(Number(req.params.id), req.body.private);
   res.json({ memory: await listMemory() });
 });
 

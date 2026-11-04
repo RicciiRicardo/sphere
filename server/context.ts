@@ -46,6 +46,11 @@ export async function updateMemory(id: number, kind: MemoryKind, content: string
   ]);
 }
 
+// Lock: only seats allowed to read email see it. Unlock: every seat does.
+export async function setMemoryPrivate(id: number, isPrivate: boolean) {
+  await db.query("UPDATE memory SET private = $2, updated_at = NOW() WHERE id = $1", [id, isPrivate]);
+}
+
 export async function deleteMemory(id: number) {
   await db.query("DELETE FROM memory WHERE id = $1", [id]);
 }
