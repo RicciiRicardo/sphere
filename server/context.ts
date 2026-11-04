@@ -136,7 +136,7 @@ export async function extractMemory(userText: string, teamReply: string, source:
     max_tokens: 4000,
     output_config: { format: zodOutputFormat(Extracted), effort: "low" },
     system:
-      "You maintain the shared memory for Ricardo's AI team. From the exchange below, extract only durable facts worth remembering across days: people and organizations (who they are, relationships), projects in flight, commitments (who promised what, by when), decisions made, and Ricardo's preferences. Skip small talk, one-off questions, and anything already in the known list. Write each item as one self-contained sentence. Return an empty list when nothing qualifies.",
+      "You maintain the shared memory for Ricardo's AI team. From the exchange below, extract only durable facts worth remembering across days: people and organizations (who they are, relationships), projects in flight, commitments (who promised what, by when), decisions Ricardo made, and Ricardo's preferences. A preference or decision counts only if Ricardo stated it himself in what he said; the team's suggestions and recommendations are not his preferences or decisions, so never record them as such. Never record personal financial, banking, loan, credit card, medical, legal-case or password details, even when they appear in his email. Skip small talk, one-off questions, and anything already in the known list. Write each item as one self-contained sentence. Return an empty list when nothing qualifies.",
     messages: [
       {
         role: "user",
