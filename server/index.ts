@@ -5,7 +5,7 @@ import { db, migrate } from "./db.js";
 import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
 import { addSeat, listFeedback, listSeats, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
 import { addMemory, backfillPrivate, deleteMemory, setMemoryPrivate, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
-import { runTurn, type TeamEvent, type TurnMode } from "./team.js";
+import { runTurn, type Interruption, type TeamEvent, type TurnMode } from "./team.js";
 import { editDraft, getDraft, listDrafts, setDraftStatus } from "./drafts.js";
 import { mailAccount, mailConfigured, recentInbox, saveDraft, sendEmail } from "./mail.js";
 import { calendarConfigured, upcomingEvents } from "./calendar.js";
@@ -137,17 +137,30 @@ app.post("/api/turn", async (req, res) => {
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
-  const emit = (event: TeamEvent) => res.write(`data: ${JSON.stringify(event)}\n\n`);
-  const keepAlive = setInterval(() => res.write(": ping\n\n"), 15_000);
+  // Live table: closing the request (Ricardo cut in) stops the rest of the turn.
+  const stop = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) stop.abort();
+  });
+  const open = () => !res.writableEnded && !res.destroyed;
+  const emit = (event: TeamEvent) => {
+    if (open()) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const keepAlive = setInterval(() => open() && res.write(": ping\n\n"), 15_000);
+  const cut = req.body?.interrupted;
+  const interrupted: Interruption | undefined =
+    cut && typeof cut.seatId === "string"
+      ? { seatId: cut.seatId.slice(0, 40), heard: String(cut.heard ?? "").slice(0, 600) }
+      : undefined;
   try {
-    await runTurn(text, emit, mode);
+    await runTurn(text, emit, mode, { signal: stop.signal, interrupted });
   } catch (err) {
     console.error("turn failed", err);
     emit({ type: "notice", text: `Something went wrong: ${err instanceof Error ? err.message : String(err)}` });
     emit({ type: "done" });
   } finally {
     clearInterval(keepAlive);
-    res.end();
+    if (open()) res.end();
   }
 });
 

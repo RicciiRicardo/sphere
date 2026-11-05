@@ -14,6 +14,7 @@ import {
   type StoredMessage,
   type TeamEvent,
   type TurnMode,
+  type Interruption,
 } from "./api";
 import {
   canListen,
@@ -21,7 +22,9 @@ import {
   enqueueSpeech,
   holdSpeech,
   listen,
+  liveListen,
   onSpeaking,
+  progress,
   releaseSpeech,
   setNaturalVoices,
   skipSpeaker,
@@ -196,6 +199,12 @@ export function App() {
   const [listening, setListening] = useState(false);
   const [voiceMode, setVoiceMode] = useState<VoiceMode>(readVoiceMode);
   const [speaking, setSpeaking] = useState<SpeakingState>({ seatId: null, queued: 0 });
+  // The turn in flight, so cutting in can stop it.
+  const turnAbort = useRef<AbortController | null>(null);
+  // Live table: the mic stays open and Ricardo can talk over the team.
+  const [liveOn, setLiveOn] = useState(false);
+  const liveListener = useRef<Listener | null>(null);
+  const cutIn = useRef<Interruption | undefined>(undefined);
   useEffect(() => onSpeaking(setSpeaking), []);
   const naturalVoices = Boolean(state?.connections.voice?.enabled);
   useEffect(() => setNaturalVoices(naturalVoices), [naturalVoices]);
@@ -240,9 +249,11 @@ export function App() {
   const liveTurn = turns.find((t) => t.live);
 
   const send = useCallback(
-    async (text: string, mode: TurnMode = "auto") => {
+    async (text: string, mode: TurnMode = "auto", interrupted?: Interruption) => {
       const clean = text.trim();
       if (!clean || busy) return;
+      const abort = new AbortController();
+      turnAbort.current = abort;
       setDraft("");
       setError("");
       setBusy(true);
@@ -255,7 +266,10 @@ export function App() {
       ]);
       let currentId = placeholderId;
       try {
-        await sendTurn(clean, mode, (e) => {
+        await sendTurn(
+          clean,
+          mode,
+          (e) => {
           if (e.type === "turn") {
             const fromId = currentId;
             currentId = e.turnId;
@@ -273,20 +287,70 @@ export function App() {
           if (e.type === "final" && voiceMode !== "off") enqueueSpeech(e.text, e.seatId);
           if (e.type === "seat" && voiceMode === "all") enqueueSpeech(e.text, e.seatId);
           setTurns((ts) => ts.map((t) => (t.id === currentId ? applyEvent(t, e) : t)));
-        });
+          },
+          { signal: abort.signal, interrupted },
+        );
         // A chair change happens on the server; refresh the roster.
         const fresh = await api.state();
         setState(fresh);
       } catch (err) {
+        if (abort.signal.aborted) {
+          // Ricardo cut in: not an error, the turn just ends here.
+          setTurns((ts) =>
+            ts.map((t) => (t.id === currentId ? { ...t, live: false, thinking: [], notices: [...t.notices, "You cut in."] } : t)),
+          );
+          return;
+        }
         if (err instanceof AuthError) setNeedsLogin(true);
         else setError(err instanceof Error ? err.message : String(err));
         setTurns((ts) => ts.map((t) => (t.id === currentId ? { ...t, live: false, thinking: [] } : t)));
       } finally {
+        if (turnAbort.current === abort) turnAbort.current = null;
         setBusy(false);
       }
     },
     [busy, voiceMode],
   );
+  // The live mic's handlers outlive renders, so they reach send through a ref.
+  const sendRef = useRef(send);
+  sendRef.current = send;
+
+  const toggleLive = () => {
+    if (liveOn) {
+      liveListener.current?.stop();
+      liveListener.current = null;
+      setLiveOn(false);
+      setDraft("");
+      return;
+    }
+    listener.current?.stop();
+    setError("");
+    setLiveOn(true);
+    liveListener.current = liveListen({
+      onBargeIn: () => {
+        // Note where the speaking seat had got to before silencing it.
+        cutIn.current = progress();
+        holdSpeech();
+        turnAbort.current?.abort();
+      },
+      onHeard: (text) => setDraft(text),
+      onUtterance: (text) => {
+        setDraft("");
+        const interrupted = cutIn.current;
+        cutIn.current = undefined;
+        // "Stop" or "wait" on its own just quiets the team.
+        if (/^(stop|wait|hold on|hang on|pause|quiet|enough|ok(ay)? stop)[.!]*$/i.test(text.trim())) return;
+        // Give an aborted turn a moment to wind down before the next one starts.
+        setTimeout(() => sendRef.current(text, "auto", interrupted), 150);
+      },
+      onError: (msg) => {
+        setError(msg);
+        setLiveOn(false);
+        liveListener.current = null;
+      },
+    });
+  };
+  useEffect(() => () => liveListener.current?.stop(), []);
 
   // Thumbs up/down on a seat's answer; tapping the same verdict again clears it.
   const rate = async (turnId: string, seatId: string, verdict: "up" | "down") => {
@@ -528,9 +592,19 @@ export function App() {
               }
             }}
           />
-          {canListen() && (
+          {canListen() && !liveOn && (
             <button type="button" className={`mic ${listening ? "live" : ""}`} onClick={toggleMic} disabled={busy} title="Talk">
               {listening ? "Send" : "Talk"}
+            </button>
+          )}
+          {canListen() && (
+            <button
+              type="button"
+              className={`mic ${liveOn ? "live" : ""}`}
+              onClick={toggleLive}
+              title="Live table: hands-free. Talk any time, even over the team, to cut in. Headphones work best."
+            >
+              {liveOn ? "End live" : "Live"}
             </button>
           )}
           <button type="submit" disabled={busy || !draft.trim()}>

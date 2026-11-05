@@ -156,12 +156,25 @@ export const api = {
   deleteMemory: (id: number) => call<{ memory: MemoryItem[] }>(`/api/memory/${id}`, { method: "DELETE" }),
 };
 
+// Live table: Ricardo cut in while this seat was speaking, having heard about this much.
+export interface Interruption {
+  seatId: string;
+  heard: string;
+}
+
 // Sends one message to the team and calls onEvent for each streamed event.
-export async function sendTurn(text: string, mode: TurnMode, onEvent: (e: TeamEvent) => void) {
+// Aborting the signal (Ricardo cutting in) stops the rest of the turn.
+export async function sendTurn(
+  text: string,
+  mode: TurnMode,
+  onEvent: (e: TeamEvent) => void,
+  opts: { signal?: AbortSignal; interrupted?: Interruption } = {},
+) {
   const res = await fetch("/api/turn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, mode }),
+    body: JSON.stringify({ text, mode, interrupted: opts.interrupted }),
+    signal: opts.signal,
   });
   if (res.status === 401) throw new AuthError("login required");
   if (!res.ok || !res.body) {
