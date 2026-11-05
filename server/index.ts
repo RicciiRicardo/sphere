@@ -10,6 +10,7 @@ import { editDraft, getDraft, listDrafts, setDraftStatus } from "./drafts.js";
 import { mailAccount, mailConfigured, recentInbox, saveDraft, sendEmail } from "./mail.js";
 import { calendarConfigured, upcomingEvents } from "./calendar.js";
 import { engineInfo } from "./engine.js";
+import { speech, ttsAvailable, ttsInfo } from "./tts.js";
 import { emailEnabled, recentEmailAccess, setSetting } from "./settings.js";
 
 const PROD = process.env.NODE_ENV === "production";
@@ -92,8 +93,33 @@ app.get("/api/state", async (_req, res) => {
     mail: { configured: mailConfigured(), account: mailConfigured() ? mailAccount() : "", enabled: emailOn },
     calendar: { configured: calendarConfigured() },
     engine: engineInfo(),
+    voice: ttsInfo(),
   };
   res.json({ seats, memory, messages: messages.rows, feedback, drafts, connections, emailLog, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
+});
+
+// One reply read aloud in its seat's voice. The browser falls back to its own
+// speech when this isn't available or fails.
+app.post("/api/tts", async (req, res) => {
+  const text = String(req.body?.text ?? "").trim();
+  const seatId = String(req.body?.seatId ?? "");
+  if (!ttsAvailable()) {
+    res.status(503).json({ error: "Natural voices aren't set up." });
+    return;
+  }
+  if (!text) {
+    res.status(400).json({ error: "Nothing to say." });
+    return;
+  }
+  try {
+    const audio = await speech(text, seatId);
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(audio);
+  } catch (err) {
+    console.error("speech failed", err);
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // One turn of conversation, streamed back as server-sent events.

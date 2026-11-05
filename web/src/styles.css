@@ -484,6 +484,20 @@ button.danger-solid {
   border-radius: 22px;
   padding: 11px 16px;
 }
+.speaking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.speaking > span:nth-child(2) {
+  flex: 1;
+}
+.speaking .muted {
+  opacity: 0.6;
+}
+
 .mic {
   background: var(--card);
   color: var(--text);

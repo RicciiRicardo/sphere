@@ -86,16 +86,197 @@ function voiceFor(seatId: string): SpeechSynthesisVoice | undefined {
   return voices[hash % voices.length];
 }
 
-export function speak(text: string, seatId: string) {
-  if (!canSpeak()) return;
+// Replies are spoken one at a time, in order, so a Roundtable sounds like a
+// conversation instead of everyone talking at once.
+interface Line {
+  text: string;
+  seatId: string;
+  // The seat's natural voice, fetched from the server as soon as the line is
+  // queued so it's ready by its turn. Undefined means use the browser's voice.
+  audio?: Promise<string | undefined>;
+  abort?: AbortController;
+}
+
+// Natural voices come from the server when it has them set up; otherwise,
+// and whenever a request fails, the browser's own speech is used.
+let naturalVoices = false;
+export function setNaturalVoices(on: boolean) {
+  naturalVoices = on;
+}
+
+let player: HTMLAudioElement | null = null;
+
+function fetchAudio(line: Line): Promise<string | undefined> {
+  line.abort = new AbortController();
+  return fetch("/api/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: speakable(line.text), seatId: line.seatId }),
+    signal: line.abort.signal,
+  })
+    .then(async (r) => (r.ok ? URL.createObjectURL(await r.blob()) : undefined))
+    .catch(() => undefined);
+}
+
+function discard(line: Line | null) {
+  if (!line) return;
+  line.abort?.abort();
+  line.audio?.then((url) => url && URL.revokeObjectURL(url));
+}
+
+function silence() {
+  if (player) {
+    player.onended = null;
+    player.onerror = null;
+    player.pause();
+    player = null;
+  }
   speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(speakable(text));
-  const voice = voiceFor(seatId);
-  if (voice) utterance.voice = voice;
-  utterance.rate = 1.05;
-  speechSynthesis.speak(utterance);
+}
+
+export interface SpeakingState {
+  seatId: string | null;
+  queued: number;
+}
+
+const queue: Line[] = [];
+let current: Line | null = null;
+let listeners: ((s: SpeakingState) => void)[] = [];
+// Set by the Stop button: the rest of this turn stays quiet until Ricardo
+// sends something new or taps Play.
+let held = false;
+// Bumped by stop and skip, so a line that was cut off doesn't start the next one twice.
+let generation = 0;
+
+function notify() {
+  const state = { seatId: current?.seatId ?? null, queued: queue.length };
+  for (const l of listeners) l(state);
+}
+
+export function onSpeaking(listener: (s: SpeakingState) => void): () => void {
+  listeners.push(listener);
+  return () => {
+    listeners = listeners.filter((l) => l !== listener);
+  };
+}
+
+// Chrome stops long utterances after about 15 seconds, so each line is
+// spoken in sentence-sized pieces.
+function chunks(text: string): string[] {
+  const sentences = text.match(/[^.!?\n]+[.!?]*\s*/g) ?? [text];
+  const out: string[] = [];
+  let buf = "";
+  for (const s of sentences) {
+    if ((buf + s).length > 220 && buf) {
+      out.push(buf.trim());
+      buf = "";
+    }
+    buf += s;
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+
+function playNext() {
+  if (current || !queue.length) {
+    notify();
+    return;
+  }
+  const line = (current = queue.shift()!);
+  notify();
+  const gen = generation;
+  const done = () => {
+    if (gen !== generation) return;
+    discard(line);
+    current = null;
+    playNext();
+  };
+  if (!line.audio) return browserSpeak(line, done);
+  line.audio.then((url) => {
+    if (gen !== generation) return;
+    if (!url) return browserSpeak(line, done);
+    // Each line ends exactly once: by finishing, or by falling back to the
+    // browser's voice if the audio can't play (a late error must not replay it).
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      done();
+    };
+    const fallBack = () => {
+      if (settled || gen !== generation) return;
+      settled = true;
+      if (player === audio) player = null;
+      audio.pause();
+      browserSpeak(line, done);
+    };
+    const audio = (player = new Audio(url));
+    audio.onended = finish;
+    audio.onerror = fallBack;
+    // Autoplay can be refused (Safari, after a long wait); fall back rather than go silent.
+    audio.play().catch(fallBack);
+  });
+}
+
+function browserSpeak(line: Line, done: () => void) {
+  const parts = chunks(speakable(line.text));
+  const voice = voiceFor(line.seatId);
+  if (!parts.length) return done();
+  parts.forEach((part, i) => {
+    const utterance = new SpeechSynthesisUtterance(part);
+    if (voice) utterance.voice = voice;
+    utterance.rate = 1.05;
+    if (i === parts.length - 1) {
+      utterance.onend = done;
+      utterance.onerror = done;
+    }
+    speechSynthesis.speak(utterance);
+  });
+}
+
+// Adds a line to the end of the queue.
+export function enqueueSpeech(text: string, seatId: string) {
+  if (!canSpeak() || !text.trim() || held) return;
+  const line: Line = { text, seatId };
+  if (naturalVoices) line.audio = fetchAudio(line);
+  queue.push(line);
+  playNext();
+}
+
+// Drops whatever is playing or queued and says this instead.
+export function speak(text: string, seatId: string) {
+  stopSpeaking();
+  held = false;
+  enqueueSpeech(text, seatId);
+}
+
+// Cuts off the current speaker and moves on to the next one.
+export function skipSpeaker() {
+  if (!canSpeak()) return;
+  generation++;
+  discard(current);
+  current = null;
+  silence();
+  playNext();
 }
 
 export function stopSpeaking() {
-  if (canSpeak()) speechSynthesis.cancel();
+  if (!canSpeak()) return;
+  generation++;
+  discard(current);
+  queue.splice(0).forEach(discard);
+  current = null;
+  silence();
+  notify();
+}
+
+// Stop button: silence now and for the rest of this turn.
+export function holdSpeech() {
+  stopSpeaking();
+  held = true;
+}
+
+// A new turn may speak again.
+export function releaseSpeech() {
+  held = false;
 }
