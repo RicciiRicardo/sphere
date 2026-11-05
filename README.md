@@ -39,6 +39,15 @@ Open http://localhost:5180. `SPHERE_MOCK=1` gives canned replies with no API cal
 
 Ask "find the email about X" and the engine turns it into search terms; Sphere then searches every folder of the mailbox (spam included, drafts excluded) for the last 180 days by default, and hands up to 25 matches with longer snippets to the email seats. It follows every email rule below: private turn, email seats only, logged, stopped by the kill switch.
 
+## Inbox review
+
+Tap **Inbox review**, or say "review my inbox" or "what emails am I missing?". Sphere scans the last 45 days of the inbox, spam and Sent folder, headers only, which is quick even on a mail server with no search index. It then lists:
+
+- **Waiting on you:** the latest message from each person who wrote and got no answer. A message counts as answered if it's flagged answered, if a reply to it is in Sent, or if Ricardo wrote to that person afterwards. Each one has a **Draft reply** button.
+- **Cluttering your inbox:** bulk senders (mailing lists, newsletters, automated mail) with three or more emails in the period. **Unsubscribe** uses the sender's own one-click unsubscribe, or sends their unsubscribe email; **Archive** moves their mail from the inbox to Archive without deleting anything. Both ask for confirmation first.
+
+Mily and Claude get the list (and only they do, under the rules below). They sort it by company (Go Global, MI Group, Purpusly, Berris Group, Maggie Pam), lead with what could bring revenue or has a deadline, and draft the top three replies as cards.
+
 ## Email rules
 
 Ricardo's inbox is confidential, so Sphere enforces these rules in code:

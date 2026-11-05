@@ -8,6 +8,7 @@ import { addMemory, backfillPrivate, deleteMemory, setMemoryPrivate, listMemory,
 import { runTurn, type Interruption, type TeamEvent, type TurnMode } from "./team.js";
 import { editDraft, getDraft, listDrafts, setDraftStatus } from "./drafts.js";
 import { mailAccount, mailConfigured, recentInbox, saveDraft, sendEmail } from "./mail.js";
+import { cleanUpSender } from "./review.js";
 import { calendarConfigured, upcomingEvents } from "./calendar.js";
 import { engineInfo } from "./engine.js";
 import { speech, ttsAvailable, ttsInfo } from "./tts.js";
@@ -242,6 +243,26 @@ app.post("/api/email/enabled", async (req, res) => {
   const enabled = req.body?.enabled === true;
   await setSetting("email_enabled", enabled ? "true" : "false");
   res.json({ enabled });
+});
+
+// Inbox review cleanup: unsubscribe from a bulk sender, or move its mail
+// from the inbox to Archive. Only on Ricardo's tap and confirm in the app.
+app.post("/api/mail/cleanup", async (req, res) => {
+  const { address, action } = req.body ?? {};
+  if (typeof address !== "string" || !/@/.test(address) || (action !== "unsubscribe" && action !== "archive")) {
+    res.status(400).json({ error: "Give a sender address and unsubscribe or archive." });
+    return;
+  }
+  if (!mailConfigured() || !(await emailEnabled())) {
+    res.status(400).json({ error: "Email access is off or not set up." });
+    return;
+  }
+  try {
+    res.json({ message: await cleanUpSender(address, action) });
+  } catch (err) {
+    console.error("mail cleanup failed", err);
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // Email drafts the team proposed. Nothing is sent without Ricardo tapping Send.
