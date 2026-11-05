@@ -467,7 +467,7 @@ export function App() {
           />
           {canListen() && (
             <button type="button" className={`mic ${listening ? "live" : ""}`} onClick={toggleMic} disabled={busy} title="Talk">
-              {listening ? "Stop" : "Talk"}
+              {listening ? "Send" : "Talk"}
             </button>
           )}
           <button type="submit" disabled={busy || !draft.trim()}>
