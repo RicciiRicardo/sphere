@@ -484,6 +484,11 @@ button.danger-solid {
   border-radius: 22px;
   padding: 11px 16px;
 }
+.mic-hint {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
 .speaking {
   display: flex;
   align-items: center;
