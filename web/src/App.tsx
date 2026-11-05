@@ -596,12 +596,25 @@ export function App() {
               {VOICE_LABEL[voiceMode]}
             </button>
           )}
-          {state.connections.mail.configured && state.connections.mail.enabled && (
+          {state.connections.mail.configured && (
             <button
               className="ghost"
               disabled={busy}
               title="Who's waiting on a reply, by company, and which bulk senders to clean up"
-              onClick={() => send("Review my inbox: who's waiting on a reply from me, and where am I missing opportunities across my companies?")}
+              onClick={async () => {
+                // Email may still be switched off (for a demo, say): offer to turn it back on.
+                if (!state.connections.mail.enabled) {
+                  if (!confirm("Email access is switched off, so the team can't read your inbox. Switch it on and run the review?")) return;
+                  try {
+                    const { enabled } = await api.setEmailEnabled(true);
+                    setState((s) => (s ? { ...s, connections: { ...s.connections, mail: { ...s.connections.mail, enabled } } } : s));
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : String(e));
+                    return;
+                  }
+                }
+                send("Review my inbox: who's waiting on a reply from me, and where am I missing opportunities across my companies?");
+              }}
             >
               <span className="wide-only">Inbox review</span>
               <span className="mobile-only">Inbox</span>
