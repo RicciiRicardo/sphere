@@ -616,9 +616,12 @@ button.danger-solid {
   .topbar {
     padding: 8px 12px;
   }
+  /* Every action stays on screen: they wrap to a second row rather than
+     running off the edge of a phone. */
   .actions {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 6px;
+    min-width: 0;
   }
   .topbar .actions button {
     padding: 5px 9px;
