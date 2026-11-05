@@ -32,6 +32,19 @@ async function transcribeWith(model: string, audio: Buffer, contentType: string)
   return result.text.trim();
 }
 
+// Names the model still spells its own way despite the vocabulary hint.
+// "Purposely" is only a name when capitalised mid-sentence.
+const SPELLINGS: [RegExp, string][] = [
+  [/\b(Mill?(?:y|ie|ey)|Mil(?:ie|ey)|Mylie|Miley)\b/g, "Mily"],
+  [/(?<=[a-z,] )Purpos(?:e)?ly\b/g, "Purpusly"],
+  [/\bPurpus(?:e)?ly\b/gi, "Purpusly"],
+  [/\bGrock\b/gi, "Grok"],
+];
+
+function fixNames(text: string) {
+  return SPELLINGS.reduce((t, [pattern, name]) => t.replace(pattern, name), text);
+}
+
 export async function transcribe(audio: Buffer, contentType: string): Promise<string> {
   const order = workingModel ? [workingModel] : MODELS;
   let lastError: unknown;
@@ -39,7 +52,7 @@ export async function transcribe(audio: Buffer, contentType: string): Promise<st
     try {
       const text = await transcribeWith(model, audio, contentType);
       workingModel = model;
-      return text;
+      return fixNames(text);
     } catch (err) {
       lastError = err;
       const status = (err as { status?: number }).status;
