@@ -92,9 +92,16 @@ interface Line {
   text: string;
   seatId: string;
   // The seat's natural voice, fetched from the server as soon as the line is
-  // queued so it's ready by its turn. Undefined means use the browser's voice.
-  audio?: Promise<string | undefined>;
-  abort?: AbortController;
+  // queued so it's ready by its turn. The opening sentence is its own piece,
+  // so it comes back in about a second and plays while the rest is made.
+  // Undefined means use the browser's voice.
+  segments?: Segment[];
+}
+
+interface Segment {
+  text: string;
+  url: Promise<string | undefined>;
+  abort: AbortController;
 }
 
 // Natural voices come from the server when it has them set up; otherwise,
@@ -163,27 +170,49 @@ if (typeof document !== "undefined") {
 }
 // How far the browser's voice has got through the current line, for progress().
 let browserParts: string[] = [];
+// Which piece of a natural-voice line is playing, for progress().
+let segmentIndex = 0;
+// Paused while Ricardo might be cutting in, until his words come back.
+let paused = false;
 let browserIndex = -1;
 
-function fetchAudio(line: Line): Promise<string | undefined> {
-  line.abort = new AbortController();
-  return fetch("/api/tts", {
+function fetchSegment(text: string, seatId: string): Segment {
+  const abort = new AbortController();
+  const url = fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: speakable(line.text), seatId: line.seatId }),
-    signal: line.abort.signal,
+    body: JSON.stringify({ text, seatId }),
+    signal: abort.signal,
   })
     .then(async (r) => (r.ok ? URL.createObjectURL(await r.blob()) : undefined))
     .catch(() => undefined);
+  return { text, url, abort };
+}
+
+// The opening sentence or two (at least a few words, at most about 200
+// characters), then the rest. Short replies stay in one piece.
+function splitOpening(text: string): string[] {
+  if (text.length < 250) return [text];
+  const sentences = text.match(/[^.!?\n]+[.!?]*\s*/g) ?? [text];
+  let head = "";
+  for (const sentence of sentences) {
+    if (head.length >= 40 || head.length + sentence.length > 200) break;
+    head += sentence;
+  }
+  if (!head || head.length >= text.length) return [text];
+  return [head.trim(), text.slice(head.length).trim()];
 }
 
 function discard(line: Line | null) {
   if (!line) return;
-  line.abort?.abort();
-  line.audio?.then((url) => url && URL.revokeObjectURL(url));
+  for (const seg of line.segments ?? []) {
+    seg.abort.abort();
+    seg.url.then((url) => url && URL.revokeObjectURL(url));
+  }
 }
 
 function silence() {
+  paused = false;
   if (player) {
     player.onended = null;
     player.onerror = null;
@@ -252,65 +281,75 @@ function playNext() {
     current = null;
     playNext();
   };
-  if (!line.audio) return browserSpeak(line, done);
-  line.audio.then((url) => {
+  if (!line.segments) return browserSpeak(line, done);
+  const segments = line.segments;
+  // Each piece ends exactly once: by finishing, or by falling back to the
+  // browser's voice for what's left if the audio can't play (a late error
+  // must not replay it).
+  const playSegment = (i: number) => {
     if (gen !== generation) return;
-    if (!url) return browserSpeak(line, done);
-    // Each line ends exactly once: by finishing, or by falling back to the
-    // browser's voice if the audio can't play (a late error must not replay it).
-    let settled = false;
-    let watch: ReturnType<typeof setInterval> | undefined;
-    const settle = () => {
-      if (settled) return false;
-      settled = true;
-      clearInterval(watch);
-      audio.onended = null;
-      audio.onerror = null;
-      return true;
-    };
-    const finish = () => {
-      if (settle()) done();
-    };
-    const fallBack = () => {
-      if (gen !== generation || !settle()) return;
-      audio.pause();
-      if (player === audio) player = null;
-      browserSpeak(line, done);
-    };
-    const audio = (player = sharedPlayer());
-    audio.onended = finish;
-    audio.onerror = fallBack;
-    audio.src = url;
-    // Autoplay can be refused (Safari, after a long wait); fall back rather than go silent.
-    audio.play().catch(() => {
-      blocked = true;
-      notify();
-      fallBack();
-    });
-    // A play() that succeeds can still sit frozen at the start. If the audio
-    // hasn't moved for four seconds, use the browser's voice; if it froze
-    // part-way, move on to the next seat. Nothing stays stuck on "speaking".
-    let last = -1;
-    let still = 0;
-    watch = setInterval(() => {
-      if (settled || gen !== generation) return clearInterval(watch);
-      if (audio.currentTime > last + 0.05) {
-        last = audio.currentTime;
-        still = 0;
-        return;
-      }
-      if (++still < 4) return;
-      if (last < 0.3) {
+    if (i >= segments.length) return done();
+    segmentIndex = i;
+    const rest = () => segments.slice(i).map((seg) => seg.text).join(" ");
+    segments[i].url.then((url) => {
+      if (gen !== generation) return;
+      if (!url) return browserSpeak(line, done, rest());
+      let settled = false;
+      let watch: ReturnType<typeof setInterval> | undefined;
+      const settle = () => {
+        if (settled) return false;
+        settled = true;
+        clearInterval(watch);
+        audio.onended = null;
+        audio.onerror = null;
+        return true;
+      };
+      const next = () => {
+        if (settle()) playSegment(i + 1);
+      };
+      const fallBack = () => {
+        if (gen !== generation || !settle()) return;
+        audio.pause();
+        if (player === audio) player = null;
+        browserSpeak(line, done, rest());
+      };
+      const audio = (player = sharedPlayer());
+      audio.onended = next;
+      audio.onerror = fallBack;
+      audio.src = url;
+      // Autoplay can be refused (Safari, after a long wait); fall back rather than go silent.
+      audio.play().catch(() => {
+        if (paused) return;
         blocked = true;
         notify();
         fallBack();
-      } else finish();
-    }, 1000);
-  });
+      });
+      // A play() that succeeds can still sit frozen at the start. If the audio
+      // hasn't moved for four seconds, use the browser's voice; if it froze
+      // part-way, move on. Nothing stays stuck on "speaking".
+      let last = -1;
+      let still = 0;
+      watch = setInterval(() => {
+        if (settled || gen !== generation) return clearInterval(watch);
+        if (paused || audio.currentTime > last + 0.05) {
+          last = Math.max(last, audio.currentTime);
+          still = 0;
+          return;
+        }
+        if (++still < 4) return;
+        if (last < 0.3) {
+          blocked = true;
+          notify();
+          fallBack();
+        } else next();
+      }, 1000);
+    });
+  };
+  playSegment(0);
 }
 
-function browserSpeak(line: Line, done: () => void) {
-  const parts = chunks(speakable(line.text));
+function browserSpeak(line: Line, done: () => void, text = speakable(line.text)) {
+  const parts = chunks(text);
   browserParts = parts;
   browserIndex = -1;
   const voice = voiceFor(line.seatId);
@@ -357,7 +396,7 @@ function browserSpeak(line: Line, done: () => void) {
 export function enqueueSpeech(text: string, seatId: string) {
   if (!canSpeak() || !text.trim() || held) return;
   const line: Line = { text, seatId };
-  if (naturalVoices) line.audio = fetchAudio(line);
+  if (naturalVoices) line.segments = splitOpening(speakable(text)).map((t) => fetchSegment(t, seatId));
   queue.push(line);
   playNext();
 }
@@ -408,8 +447,15 @@ export function progress(): { seatId: string; heard: string } | undefined {
   if (!current) return undefined;
   const words = speakable(current.text).split(/\s+/).filter(Boolean);
   let fraction = 0.5;
-  if (player && Number.isFinite(player.duration) && player.duration > 0) fraction = player.currentTime / player.duration;
-  else if (browserParts.length) fraction = (browserIndex + 1) / browserParts.length;
+  const segs = current.segments;
+  if (player && Number.isFinite(player.duration) && player.duration > 0) {
+    const within = player.currentTime / player.duration;
+    if (segs && segs.length > 1) {
+      const total = segs.reduce((n, seg) => n + seg.text.length, 0);
+      const before = segs.slice(0, segmentIndex).reduce((n, seg) => n + seg.text.length, 0);
+      fraction = (before + within * (segs[segmentIndex]?.text.length ?? 0)) / total;
+    } else fraction = within;
+  } else if (browserParts.length) fraction = (browserIndex + 1) / browserParts.length;
   const upTo = Math.max(1, Math.round(words.length * Math.min(1, fraction)));
   return { seatId: current.seatId, heard: words.slice(Math.max(0, upTo - 60), upTo).join(" ") };
 }
@@ -509,4 +555,29 @@ export function liveListen(h: LiveHandlers): Listener {
       rec?.stop();
     },
   };
+}
+
+// Ricardo may be cutting in: hold the speaker where they are until his words
+// come back, then either resume (it was noise or the speakers) or stop.
+export function pauseSpeech() {
+  if (!current || paused) return;
+  paused = true;
+  player?.pause();
+  if (canSpeak()) speechSynthesis.pause();
+}
+
+export function resumeSpeech() {
+  if (!paused) return;
+  paused = false;
+  player?.play().catch(() => undefined);
+  if (canSpeak()) speechSynthesis.resume();
+}
+
+// Whether what the mic picked up is mostly the speaking seat's own words.
+export function looksLikeEcho(said: string): boolean {
+  if (!current) return false;
+  const line = speakable(current.text).toLowerCase();
+  const words = said.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  if (!words.length) return true;
+  return words.filter((w) => line.includes(w)).length / words.length >= 0.7;
 }

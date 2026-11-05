@@ -11,6 +11,7 @@ import { mailAccount, mailConfigured, recentInbox, saveDraft, sendEmail } from "
 import { calendarConfigured, upcomingEvents } from "./calendar.js";
 import { engineInfo } from "./engine.js";
 import { speech, ttsAvailable, ttsInfo } from "./tts.js";
+import { sttAvailable, transcribe } from "./stt.js";
 import { emailEnabled, recentEmailAccess, setSetting } from "./settings.js";
 
 const PROD = process.env.NODE_ENV === "production";
@@ -93,7 +94,7 @@ app.get("/api/state", async (_req, res) => {
     mail: { configured: mailConfigured(), account: mailConfigured() ? mailAccount() : "", enabled: emailOn },
     calendar: { configured: calendarConfigured() },
     engine: engineInfo(),
-    voice: ttsInfo(),
+    voice: { ...ttsInfo(), transcribe: sttAvailable() },
   };
   res.json({ seats, memory, messages: messages.rows, feedback, drafts, connections, emailLog, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
 });
@@ -118,6 +119,26 @@ app.post("/api/tts", async (req, res) => {
     res.send(audio);
   } catch (err) {
     console.error("speech failed", err);
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// What Ricardo said, as text. The browser records with echo cancellation and
+// sends the audio as is (webm from Chrome, mp4 from Safari).
+app.post("/api/transcribe", express.raw({ type: "audio/*", limit: "25mb" }), async (req, res) => {
+  if (!sttAvailable()) {
+    res.status(503).json({ error: "Transcription isn't set up." });
+    return;
+  }
+  const audio = req.body;
+  if (!Buffer.isBuffer(audio) || audio.length < 1000) {
+    res.json({ text: "" });
+    return;
+  }
+  try {
+    res.json({ text: await transcribe(audio, String(req.headers["content-type"] ?? "audio/webm")) });
+  } catch (err) {
+    console.error("transcription failed", err);
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });

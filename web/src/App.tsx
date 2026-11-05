@@ -21,11 +21,15 @@ import {
   canSpeak,
   enqueueSpeech,
   holdSpeech,
+  isSpeaking,
   listen,
   liveListen,
+  looksLikeEcho,
+  pauseSpeech,
   onSpeaking,
   progress,
   releaseSpeech,
+  resumeSpeech,
   setNaturalVoices,
   skipSpeaker,
   speak,
@@ -33,6 +37,7 @@ import {
   type Listener,
   type SpeakingState,
 } from "./voice";
+import { canRecord, liveMic, recordOnce } from "./mic";
 
 interface Turn {
   id: string;
@@ -204,6 +209,7 @@ export function App() {
   // Live table: the mic stays open and Ricardo can talk over the team.
   const [liveOn, setLiveOn] = useState(false);
   const liveListener = useRef<Listener | null>(null);
+  const liveWanted = useRef(false);
   const cutIn = useRef<Interruption | undefined>(undefined);
   useEffect(() => onSpeaking(setSpeaking), []);
   const naturalVoices = Boolean(state?.connections.voice?.enabled);
@@ -219,6 +225,9 @@ export function App() {
   const [editing, setEditing] = useState<string | null>(null);
   const [composeMode, setComposeMode] = useState<"auto" | "roundtable" | "pitch">("auto");
   const listener = useRef<Listener | null>(null);
+  // Talk with server transcription: the recording in progress.
+  const recording = useRef<{ stop(): Promise<string>; cancel(): void } | null>(null);
+  const [micHint, setMicHint] = useState("");
   const threadEnd = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -315,17 +324,95 @@ export function App() {
   const sendRef = useRef(send);
   sendRef.current = send;
 
+  const toggleRecording = async () => {
+    if (listening) {
+      const rec = recording.current;
+      recording.current = null;
+      setListening(false);
+      if (!rec) return;
+      setMicHint("Transcribing…");
+      try {
+        const text = await rec.stop();
+        if (text) {
+          send(text, composeMode);
+          setComposeMode("auto");
+        } else setError("Didn't catch that. Try again a little closer to the mic.");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setMicHint("");
+      }
+      return;
+    }
+    holdSpeech();
+    setError("");
+    setListening(true);
+    try {
+      recording.current = await recordOnce();
+    } catch (err) {
+      setListening(false);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // What Ricardo said at the live table. Noise or the speakers' own voice:
+  // the paused seat carries on. "Stop" or "wait": the team goes quiet.
+  // Anything else cuts in and goes to the team.
+  const heardAtTable = (text: string) => {
+    const interrupted = cutIn.current;
+    cutIn.current = undefined;
+    if (!text.trim() || looksLikeEcho(text)) {
+      resumeSpeech();
+      return;
+    }
+    holdSpeech();
+    turnAbort.current?.abort();
+    if (/^(stop|wait|hold on|hang on|pause|quiet|enough|ok(ay)? stop)[.!]*$/i.test(text.trim())) return;
+    // Give an aborted turn a moment to wind down before the next one starts.
+    setTimeout(() => sendRef.current(text, "auto", interrupted), 150);
+  };
+
   const toggleLive = () => {
+    liveWanted.current = !liveOn;
     if (liveOn) {
       liveListener.current?.stop();
       liveListener.current = null;
       setLiveOn(false);
       setDraft("");
+      setMicHint("");
       return;
     }
     listener.current?.stop();
     setError("");
     setLiveOn(true);
+    if (accurateMic) {
+      liveMic({
+        onSpeechStart: () => {
+          // Note where the speaking seat had got to, and hold it there until
+          // his words come back.
+          cutIn.current = progress();
+          pauseSpeech();
+          setMicHint("Listening…");
+        },
+        onSpeechEnd: () => setMicHint("Transcribing…"),
+        onText: (text) => {
+          setMicHint("");
+          heardAtTable(text);
+        },
+        onError: (msg) => setError(msg),
+        teamSpeaking: isSpeaking,
+      })
+        .then((mic) => {
+          // Live may have been switched off while the mic was opening.
+          if (liveWanted.current) liveListener.current = mic;
+          else mic.stop();
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : String(err));
+          setLiveOn(false);
+        });
+      return;
+    }
     liveListener.current = liveListen({
       onBargeIn: () => {
         // Note where the speaking seat had got to before silencing it.
@@ -366,7 +453,12 @@ export function App() {
   const verdictFor = (turnId: string, seatId: string) =>
     state?.feedback.find((f) => f.turn_id === turnId && f.seat_id === seatId)?.verdict;
 
+  // Server transcription is far more accurate than the browser's dictation
+  // (Safari's above all), and its echo cancellation keeps the team's voices out.
+  const accurateMic = Boolean(state?.connections.voice?.transcribe) && canRecord();
+
   const toggleMic = () => {
+    if (accurateMic) return toggleRecording();
     if (listening) {
       listener.current?.stop();
       return;
@@ -524,6 +616,7 @@ export function App() {
       </aside>
 
       <footer className="composer">
+        {micHint && <p className="muted mic-hint">{micHint}</p>}
         {speaking.blocked && voiceMode !== "off" && (
           <p className="notice">Your browser held back the sound. Click anywhere on the page to turn it on, and check your Mac's volume and output.</p>
         )}
