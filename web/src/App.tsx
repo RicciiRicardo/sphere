@@ -198,7 +198,7 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceMode, setVoiceMode] = useState<VoiceMode>(readVoiceMode);
-  const [speaking, setSpeaking] = useState<SpeakingState>({ seatId: null, queued: 0 });
+  const [speaking, setSpeaking] = useState<SpeakingState>({ seatId: null, queued: 0, blocked: false });
   // The turn in flight, so cutting in can stop it.
   const turnAbort = useRef<AbortController | null>(null);
   // Live table: the mic stays open and Ricardo can talk over the team.
@@ -524,6 +524,9 @@ export function App() {
       </aside>
 
       <footer className="composer">
+        {speaking.blocked && voiceMode !== "off" && (
+          <p className="notice">Your browser held back the sound. Click anywhere on the page to turn it on, and check your Mac's volume and output.</p>
+        )}
         {speaking.seatId && (
           <div className="speaking">
             <span

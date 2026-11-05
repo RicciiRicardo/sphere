@@ -105,6 +105,62 @@ export function setNaturalVoices(on: boolean) {
 }
 
 let player: HTMLAudioElement | null = null;
+
+// Browsers (Safari above all) only let a page play sound it starts on its
+// own once the person has clicked or typed on it. So every line plays through
+// one shared audio element that the first click or keypress unlocks, and the
+// browser's voice gets a silent first utterance at the same moment.
+let shared: HTMLAudioElement | null = null;
+let unlocked = false;
+// Set when sound was blocked or stalled, so the app can say so.
+let blocked = false;
+
+function sharedPlayer() {
+  if (!shared) shared = new Audio();
+  return shared;
+}
+
+function silentClip() {
+  const n = 800;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const w = (o: number, t: string) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF");
+  v.setUint32(4, 36 + n * 2, true);
+  w(8, "WAVE");
+  w(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true);
+  v.setUint32(28, 16000, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  w(36, "data");
+  v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
+function unlock() {
+  if (unlocked || current) return;
+  const el = sharedPlayer();
+  el.src = silentClip();
+  el.play()
+    .then(() => {
+      unlocked = true;
+      if (blocked) {
+        blocked = false;
+        notify();
+      }
+    })
+    .catch(() => undefined);
+  if (canSpeak()) speechSynthesis.speak(new SpeechSynthesisUtterance(" "));
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("pointerdown", unlock, true);
+  document.addEventListener("keydown", unlock, true);
+}
 // How far the browser's voice has got through the current line, for progress().
 let browserParts: string[] = [];
 let browserIndex = -1;
@@ -140,6 +196,8 @@ function silence() {
 export interface SpeakingState {
   seatId: string | null;
   queued: number;
+  // The browser blocked or stalled the sound; a click usually fixes it.
+  blocked: boolean;
 }
 
 const queue: Line[] = [];
@@ -152,7 +210,7 @@ let held = false;
 let generation = 0;
 
 function notify() {
-  const state = { seatId: current?.seatId ?? null, queued: queue.length };
+  const state = { seatId: current?.seatId ?? null, queued: queue.length, blocked };
   for (const l of listeners) l(state);
 }
 
@@ -201,23 +259,53 @@ function playNext() {
     // Each line ends exactly once: by finishing, or by falling back to the
     // browser's voice if the audio can't play (a late error must not replay it).
     let settled = false;
-    const finish = () => {
-      if (settled) return;
+    let watch: ReturnType<typeof setInterval> | undefined;
+    const settle = () => {
+      if (settled) return false;
       settled = true;
-      done();
+      clearInterval(watch);
+      audio.onended = null;
+      audio.onerror = null;
+      return true;
+    };
+    const finish = () => {
+      if (settle()) done();
     };
     const fallBack = () => {
-      if (settled || gen !== generation) return;
-      settled = true;
-      if (player === audio) player = null;
+      if (gen !== generation || !settle()) return;
       audio.pause();
+      if (player === audio) player = null;
       browserSpeak(line, done);
     };
-    const audio = (player = new Audio(url));
+    const audio = (player = sharedPlayer());
     audio.onended = finish;
     audio.onerror = fallBack;
+    audio.src = url;
     // Autoplay can be refused (Safari, after a long wait); fall back rather than go silent.
-    audio.play().catch(fallBack);
+    audio.play().catch(() => {
+      blocked = true;
+      notify();
+      fallBack();
+    });
+    // A play() that succeeds can still sit frozen at the start. If the audio
+    // hasn't moved for four seconds, use the browser's voice; if it froze
+    // part-way, move on to the next seat. Nothing stays stuck on "speaking".
+    let last = -1;
+    let still = 0;
+    watch = setInterval(() => {
+      if (settled || gen !== generation) return clearInterval(watch);
+      if (audio.currentTime > last + 0.05) {
+        last = audio.currentTime;
+        still = 0;
+        return;
+      }
+      if (++still < 4) return;
+      if (last < 0.3) {
+        blocked = true;
+        notify();
+        fallBack();
+      } else finish();
+    }, 1000);
   });
 }
 
@@ -227,16 +315,39 @@ function browserSpeak(line: Line, done: () => void) {
   browserIndex = -1;
   const voice = voiceFor(line.seatId);
   if (!parts.length) return done();
+  // If the browser's voice never starts (blocked, or no voices installed),
+  // move on after a few seconds; and never wait longer than the line could take.
+  const gen = generation;
+  let started = false;
+  let finished = false;
+  const end = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(noStart);
+    clearTimeout(cap);
+    done();
+  };
+  const noStart = setTimeout(() => {
+    if (started || gen !== generation) return;
+    blocked = true;
+    notify();
+    speechSynthesis.cancel();
+    end();
+  }, 4000);
+  const words = parts.join(" ").split(/\s+/).length;
+  // People speak about 2.5 words a second; allow a little more, then move on.
+  const cap = setTimeout(() => gen === generation && end(), (words / 2.2 + 5) * 1000);
   parts.forEach((part, i) => {
     const utterance = new SpeechSynthesisUtterance(part);
     utterance.onstart = () => {
+      started = true;
       browserIndex = i;
     };
     if (voice) utterance.voice = voice;
     utterance.rate = 1.05;
     if (i === parts.length - 1) {
-      utterance.onend = done;
-      utterance.onerror = done;
+      utterance.onend = end;
+      utterance.onerror = end;
     }
     speechSynthesis.speak(utterance);
   });
