@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   AuthError,
+  idleFor,
+  noteActivity,
   sendTurn,
+  type SignedOutReason,
   type AppState,
   type Bid,
   type Connections,
@@ -210,6 +213,7 @@ function writePref(key: string, value: boolean) {
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [needsLogin, setNeedsLogin] = useState(false);
+  const [signedOutReason, setSignedOutReason] = useState<SignedOutReason>("none");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
@@ -249,8 +253,10 @@ export function App() {
       setTurns(turnsFromMessages(s.messages));
       setNeedsLogin(false);
     } catch (err) {
-      if (err instanceof AuthError) setNeedsLogin(true);
-      else setError(err instanceof Error ? err.message : String(err));
+      if (err instanceof AuthError) {
+        setSignedOutReason(err.reason);
+        setNeedsLogin(true);
+      } else setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
 
@@ -322,7 +328,7 @@ export function App() {
           );
           return;
         }
-        if (err instanceof AuthError) setNeedsLogin(true);
+        if (err instanceof AuthError) signOutRef.current(err.reason);
         else setError(err instanceof Error ? err.message : String(err));
         setTurns((ts) => ts.map((t) => (t.id === currentId ? { ...t, live: false, thinking: [] } : t)));
       } finally {
@@ -332,6 +338,58 @@ export function App() {
     },
     [busy, voiceMode],
   );
+  // Signing out, by timeout or by tap: stop the mic and voices, end the
+  // session, and clear the screen so nothing private stays visible.
+  const signOut = useCallback((reason: SignedOutReason, everywhere = false) => {
+    liveWanted.current = false;
+    liveListener.current?.stop();
+    liveListener.current = null;
+    listener.current?.stop();
+    recording.current?.cancel();
+    recording.current = null;
+    turnAbort.current?.abort();
+    stopSpeaking();
+    setLiveOn(false);
+    setMicHint("");
+    setDraft("");
+    (everywhere ? api.logoutAll() : api.logout()).catch(() => undefined);
+    setState(null);
+    setTurns([]);
+    setSignedOutReason(reason);
+    setNeedsLogin(true);
+  }, []);
+  const signOutRef = useRef(signOut);
+  signOutRef.current = signOut;
+
+  // The inactivity timeout. A tap, a key, his voice, a turn in progress or
+  // the team speaking all count as activity; while he's active, the server
+  // session is kept alive every few minutes.
+  const idleMinutes = state?.session?.idleMinutes ?? 0;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  useEffect(() => {
+    if (!idleMinutes) return;
+    noteActivity();
+    let lastPing = Date.now();
+    const events = ["pointerdown", "keydown", "touchstart", "wheel"] as const;
+    events.forEach((e) => window.addEventListener(e, noteActivity, { passive: true }));
+    const timer = setInterval(() => {
+      if (busyRef.current || isSpeaking()) noteActivity();
+      if (idleFor() > idleMinutes * 60_000) {
+        signOutRef.current("idle");
+        return;
+      }
+      if (idleFor() < 120_000 && Date.now() - lastPing > 4 * 60_000) {
+        lastPing = Date.now();
+        api.keepAlive().catch((err) => err instanceof AuthError && signOutRef.current(err.reason));
+      }
+    }, 15_000);
+    return () => {
+      clearInterval(timer);
+      events.forEach((e) => window.removeEventListener(e, noteActivity));
+    };
+  }, [idleMinutes]);
+
   // The live mic's handlers outlive renders, so they reach send through a ref.
   const sendRef = useRef(send);
   sendRef.current = send;
@@ -504,7 +562,7 @@ export function App() {
     if (next === "off") stopSpeaking();
   };
 
-  if (needsLogin) return <Login onDone={load} />;
+  if (needsLogin) return <Login reason={signedOutReason} onDone={load} />;
   if (!state) {
     return <div className="splash">{error ? <p className="error">{error}</p> : <div className="orb pulse" />}</div>;
   }
@@ -547,6 +605,12 @@ export function App() {
             >
               <span className="wide-only">Inbox review</span>
               <span className="mobile-only">Inbox</span>
+            </button>
+          )}
+          {idleMinutes > 0 && (
+            <button className="ghost" title="Sign out of Sphere on this device" onClick={() => signOut("none")}>
+              <span className="wide-only">Sign out</span>
+              <span className="mobile-only">Exit</span>
             </button>
           )}
           <button disabled={busy} onClick={() => send("Good morning, team.", "briefing")}>
@@ -631,6 +695,10 @@ export function App() {
           onToggle={(enabled) =>
             setState((s) => (s ? { ...s, connections: { ...s.connections, mail: { ...s.connections.mail, enabled } } } : s))
           }
+          idleMinutes={idleMinutes}
+          onSignOutAll={() => {
+            if (confirm("Sign out of Sphere on every device, including this one?")) signOut("none", true);
+          }}
         />
         <MemoryPanel
           memory={state.memory}
@@ -902,7 +970,11 @@ function ConnectionsBox({
   log,
   seatName,
   onToggle,
+  idleMinutes,
+  onSignOutAll,
 }: {
+  idleMinutes: number;
+  onSignOutAll: () => void;
   connections: Connections;
   log: EmailAccessEntry[];
   seatName: (id: string) => string;
@@ -991,6 +1063,17 @@ function ConnectionsBox({
             </>
           )}
         </p>
+      )}
+      {idleMinutes > 0 && (
+        <>
+          <p className="conn-line">
+            <span className="dot ok" />
+            Security: signs out after {idleMinutes} minutes without activity
+          </p>
+          <button className="ghost small danger" onClick={onSignOutAll}>
+            Sign out everywhere
+          </button>
+        </>
       )}
     </div>
   );
@@ -1428,7 +1511,13 @@ function SeatEditor({
   );
 }
 
-function Login({ onDone }: { onDone: () => void }) {
+const SIGNED_OUT: Record<SignedOutReason, string> = {
+  none: "",
+  idle: "You were signed out after a while without activity.",
+  expired: "Your session reached its time limit. Sign in again.",
+};
+
+function Login({ reason, onDone }: { reason: SignedOutReason; onDone: () => void }) {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   return (
@@ -1447,6 +1536,7 @@ function Login({ onDone }: { onDone: () => void }) {
       >
         <div className="orb big" />
         <h1>Sphere</h1>
+        {SIGNED_OUT[reason] && <p className="muted">{SIGNED_OUT[reason]}</p>}
         <input type="password" autoFocus value={password} placeholder="Password" onChange={(e) => setPassword(e.target.value)} />
         <button type="submit">Enter</button>
         {err && <p className="error">{err}</p>}

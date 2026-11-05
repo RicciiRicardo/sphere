@@ -94,6 +94,8 @@ export interface AppState {
   mock: boolean;
   memoryKinds: string[];
   providers: Provider[];
+  // 0 when there's no password (local use), so no timeout.
+  session: { idleMinutes: number };
 }
 
 // The inbox review: people waiting on a reply, and bulk senders to clean up.
@@ -146,14 +148,34 @@ export type TeamEvent =
   | { type: "review"; review: MailReview }
   | { type: "done" };
 
-export class AuthError extends Error {}
+// Why the server asked for the password again: no session, too long without
+// activity, or past the session's maximum length.
+export type SignedOutReason = "none" | "idle" | "expired";
+
+export class AuthError extends Error {
+  constructor(public reason: SignedOutReason = "none") {
+    super("login required");
+  }
+}
+
+// When Ricardo last did something: a tap, a key, his voice, or a request.
+let lastActivity = Date.now();
+export const noteActivity = () => {
+  lastActivity = Date.now();
+};
+export const idleFor = () => Date.now() - lastActivity;
+
+async function authError(res: Response) {
+  const body = await res.json().catch(() => ({}));
+  return new AuthError(body.reason === "idle" || body.reason === "expired" ? body.reason : "none");
+}
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
-  if (res.status === 401 && url !== "/api/login") throw new AuthError("login required");
+  if (res.status === 401 && url !== "/api/login") throw await authError(res);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`);
   return body as T;
@@ -162,6 +184,9 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   state: () => call<AppState>("/api/state"),
   login: (password: string) => call<{ ok: true }>("/api/login", { method: "POST", body: JSON.stringify({ password }) }),
+  logout: () => call<{ ok: true }>("/api/logout", { method: "POST" }),
+  logoutAll: () => call<{ ok: true }>("/api/logout-all", { method: "POST" }),
+  keepAlive: () => call<{ ok: true }>("/api/session"),
   updateSeat: (id: string, patch: Partial<Seat>) =>
     call<{ seats: Seat[] }>(`/api/seats/${id}`, { method: "PUT", body: JSON.stringify(patch) }),
   setChair: (id: string) => call<{ seats: Seat[] }>(`/api/seats/${id}/chair`, { method: "POST" }),
@@ -212,7 +237,7 @@ export async function sendTurn(
     body: JSON.stringify({ text, mode, interrupted: opts.interrupted }),
     signal: opts.signal,
   });
-  if (res.status === 401) throw new AuthError("login required");
+  if (res.status === 401) throw await authError(res);
   if (!res.ok || !res.body) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Request failed (${res.status})`);

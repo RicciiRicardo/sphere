@@ -13,7 +13,7 @@ import { calendarConfigured, upcomingEvents } from "./calendar.js";
 import { engineInfo } from "./engine.js";
 import { speech, ttsAvailable, ttsInfo } from "./tts.js";
 import { sttAvailable, transcribe } from "./stt.js";
-import { emailEnabled, recentEmailAccess, setSetting } from "./settings.js";
+import { emailEnabled, getSetting, recentEmailAccess, setSetting } from "./settings.js";
 
 const PROD = process.env.NODE_ENV === "production";
 const PORT = Number(process.env.PORT ?? 5180);
@@ -41,14 +41,41 @@ function readCookie(req: Request, name: string) {
   return undefined;
 }
 
-function isAuthed(req: Request) {
-  if (!PASSWORD) return true;
+// Sessions end after a stretch without activity, and in any case some hours
+// after login, so Sphere asks for the password again. The cookie carries when
+// the session started and when it was last used, signed together.
+const IDLE_MS = Math.max(5, Number(process.env.SPHERE_IDLE_MINUTES) || 30) * 60_000;
+const MAX_MS = Math.max(1, Number(process.env.SPHERE_SESSION_HOURS) || 12) * 3_600_000;
+// "Sign out everywhere" ends every session that started before this moment.
+let sessionEpoch = 0;
+
+type Session = { ok: true; issued: number; last: number } | { ok: false; reason: "none" | "idle" | "expired" };
+
+function readSession(req: Request): Session {
   const token = readCookie(req, COOKIE);
-  if (!token) return false;
-  const [issued, mac] = token.split(".");
-  if (!issued || !mac) return false;
-  const expected = sign(issued);
-  return mac.length === expected.length && timingSafeEqual(Buffer.from(mac), Buffer.from(expected));
+  if (!token) return { ok: false, reason: "none" };
+  const [issued, last, mac] = token.split(".");
+  if (!issued || !last || !mac) return { ok: false, reason: "none" };
+  const expected = sign(`${issued}.${last}`);
+  if (mac.length !== expected.length || !timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) return { ok: false, reason: "none" };
+  const now = Date.now();
+  if (Number(issued) <= sessionEpoch) return { ok: false, reason: "none" };
+  if (now - Number(issued) > MAX_MS) return { ok: false, reason: "expired" };
+  if (now - Number(last) > IDLE_MS) return { ok: false, reason: "idle" };
+  return { ok: true, issued: Number(issued), last: Number(last) };
+}
+
+function setSession(res: Response, issued: number) {
+  const last = Date.now();
+  const maxAge = Math.max(0, Math.floor((issued + MAX_MS - last) / 1000));
+  res.setHeader(
+    "Set-Cookie",
+    `${COOKIE}=${issued}.${last}.${sign(`${issued}.${last}`)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${PROD ? "; Secure" : ""}`,
+  );
+}
+
+function clearSession(res: Response) {
+  res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${PROD ? "; Secure" : ""}`);
 }
 
 app.get("/api/health", (_req, res) => {
@@ -65,18 +92,39 @@ app.post("/api/login", (req, res) => {
     res.status(401).json({ error: "Wrong password." });
     return;
   }
-  const issued = Date.now().toString();
-  const maxAge = 60 * 60 * 24 * 60; // 60 days
-  res.setHeader(
-    "Set-Cookie",
-    `${COOKIE}=${issued}.${sign(issued)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${PROD ? "; Secure" : ""}`,
-  );
+  setSession(res, Date.now());
   res.json({ ok: true });
 });
 
+app.post("/api/logout", (_req, res) => {
+  clearSession(res);
+  res.json({ ok: true });
+});
+
+// Every request is activity: it keeps the session alive, refreshing the
+// cookie at most once a minute.
 app.use("/api", (req, res, next) => {
-  if (isAuthed(req)) return next();
-  res.status(401).json({ error: "login required" });
+  if (!PASSWORD) return next();
+  const session = readSession(req);
+  if (!session.ok) {
+    if (session.reason !== "none") clearSession(res);
+    res.status(401).json({ error: "login required", reason: session.reason });
+    return;
+  }
+  if (Date.now() - session.last > 60_000) setSession(res, session.issued);
+  next();
+});
+
+// The app calls this while Ricardo is active without otherwise talking to the server.
+app.get("/api/session", (_req, res) => {
+  res.json({ ok: true, idleMinutes: IDLE_MS / 60_000 });
+});
+
+app.post("/api/logout-all", async (_req, res) => {
+  sessionEpoch = Date.now();
+  await setSetting("session_epoch", String(sessionEpoch));
+  clearSession(res);
+  res.json({ ok: true });
 });
 
 app.get("/api/state", async (_req, res) => {
@@ -97,7 +145,19 @@ app.get("/api/state", async (_req, res) => {
     engine: engineInfo(),
     voice: { ...ttsInfo(), transcribe: sttAvailable() },
   };
-  res.json({ seats, memory, messages: messages.rows, feedback, drafts, connections, emailLog, mock: isMock(), memoryKinds: MEMORY_KINDS, providers: PROVIDERS });
+  res.json({
+    seats,
+    memory,
+    messages: messages.rows,
+    feedback,
+    drafts,
+    connections,
+    emailLog,
+    mock: isMock(),
+    memoryKinds: MEMORY_KINDS,
+    providers: PROVIDERS,
+    session: { idleMinutes: PASSWORD ? IDLE_MS / 60_000 : 0 },
+  });
 });
 
 // One reply read aloud in its seat's voice. The browser falls back to its own
@@ -411,6 +471,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 async function main() {
   await migrate();
+  sessionEpoch = Number(await getSetting("session_epoch")) || 0;
   await seedSeats();
   await backfillPrivate();
 
