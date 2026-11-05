@@ -167,6 +167,12 @@ export function App() {
   const [voiceOn, setVoiceOn] = useState(() => readPref("sphere.voice", true));
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<"none" | "team" | "memory">("none");
+  // On a wide screen the memory column can be hidden to keep the focus on the conversation.
+  const [memoryHidden, setMemoryHidden] = useState(() => readPref("sphere.memoryHidden", false));
+  const toggleMemory = () => {
+    setMemoryHidden(!memoryHidden);
+    writePref("sphere.memoryHidden", !memoryHidden);
+  };
   const [editing, setEditing] = useState<string | null>(null);
   const [composeMode, setComposeMode] = useState<"auto" | "roundtable" | "pitch">("auto");
   const listener = useRef<Listener | null>(null);
@@ -297,7 +303,7 @@ export function App() {
   const chair = seats.find((s) => s.is_chair);
 
   return (
-    <div className={`app panel-${panel}`}>
+    <div className={`app panel-${panel}${memoryHidden ? " memory-hidden" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <div className={`orb ${busy ? "pulse" : ""}`} />
@@ -310,6 +316,9 @@ export function App() {
           </button>
           <button className="ghost mobile-only" onClick={() => setPanel(panel === "memory" ? "none" : "memory")}>
             Memory
+          </button>
+          <button className="ghost wide-only" onClick={toggleMemory} title="Show or hide the memory column">
+            {memoryHidden ? "Show memory" : "Hide memory"}
           </button>
           {canSpeak() && (
             <button className={`ghost ${voiceOn ? "on" : ""}`} onClick={toggleVoice} title="Speak the team's replies aloud">
