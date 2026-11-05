@@ -236,9 +236,9 @@ const MOCK_INBOX: InboxMessage[] = [
   {
     uid: 3,
     messageId: "<mock-3@example.com>",
-    from: "Vanessa Brown",
-    fromAddress: "vanessa@example.com",
-    subject: "King Tamer shipment to Kingston",
+    from: "Dana Reyes",
+    fromAddress: "dana@example.com",
+    subject: "Salon dryer shipment to Kingston",
     date: hoursAgo(3),
     unread: true,
     snippet: "Hi Ricardo, the distributor in Kingston wants pricing for 200 units by Friday. Can you send the landed cost?",
@@ -256,8 +256,8 @@ const MOCK_INBOX: InboxMessage[] = [
   {
     uid: 1,
     messageId: "<mock-1@example.com>",
-    from: "Aubyn",
-    fromAddress: "aubyn@example.com",
+    from: "Morgan Lee",
+    fromAddress: "morgan@example.com",
     subject: "Friday call",
     date: hoursAgo(30),
     unread: false,

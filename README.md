@@ -1,16 +1,16 @@
 # Sphere
 
-Sphere by MI Group: talk to a team of AI models (Claude, Muse, Perplexity, Grok, ChatGPT, Gemini) in one place, by voice or text, working from one shared context.
+Sphere by MI Group: talk to a team of AI models (Muse Spark, Claude, Perplexity, Grok, ChatGPT, Gemini) in one place, by voice or text, working from one shared context. Meta's Muse Spark chairs the team and runs the engine behind it.
 
-Phase 1 of the [Sphere concept](https://claude.ai/artifact/WivxvxcFcNA8GFqFLiS2cK):
+What it does:
 
-- **Routed conversation.** A coordinator (Claude Haiku) sends each message to the seats it needs; the chair merges their answers into one reply.
+- **Routed conversation.** The engine (Muse Spark) sends each message to the seats it needs; the chair merges their answers into one reply.
 - **Talk to one seat by name.** "Grok, what's happening on X?" goes only to Grok, and Grok answers directly.
-- **Reassignable chair.** Claude chairs by default. Say "Muse, take the chair", or use Make chair in a seat's settings.
+- **Reassignable chair.** Mily, a Muse Spark seat, chairs the live team (a fresh install starts with Claude). Say "Claude, take the chair", or use Make chair in a seat's settings.
 - **Shared team memory (the context engine).** People, projects, commitments, decisions, preferences and notes. The team adds to it after each exchange; you can add, edit or remove anything in the memory panel.
 - **Voice.** Tap Talk to speak and the team's reply is read aloud, with a different voice per seat. This uses the browser's built-in speech (Chrome or Safari), so no voice provider is needed yet.
 - **Roundtable.** "Team, debate this" (or the Roundtable button): every seat gives an opening view, then responds to the others by name; the chair closes with where the team agrees, where it splits, and a recommendation.
-- **Pitch.** "Who wants this?" (or the Pitch button): every seat bids with a plan, why it fits, and a confidence score. The coordinator awards the task on fit, plan, teammates' views and track record (self-reported confidence counts least), the winner does it, and "Give it to…" hands it to another seat instead.
+- **Pitch.** "Who wants this?" (or the Pitch button): every seat bids with a plan, why it fits, and a confidence score. The engine awards the task on fit, plan, teammates' views and track record (self-reported confidence counts least), the winner does it, and "Give it to…" hands it to another seat instead.
 - **Track record.** 👍/👎 on answers. Each seat's approval rate (smoothed, starting at 50%) shows in the team list and weighs its Pitch bids.
 - **Email and calendar.** Reads the migroupco.com inbox (IMAP) and iCloud Calendar (CalDAV) when a message is about email, meetings or the schedule, and always for the morning briefing. When you ask for an email, the team writes it as a draft card you can edit, **Save to Drafts** (it lands in the mailbox's own Drafts folder), or **Send**. Nothing is sent without your tap and a confirmation. Email text is treated as information, never as instructions.
 - **Engine on Muse.** The behind-the-scenes engine (routing, judging Pitch bids, keeping the shared memory) runs on Meta's Muse Spark when `META_API_KEY` is set, with Claude Haiku as an automatic fallback. `SPHERE_ENGINE=anthropic` switches it back; `SPHERE_ENGINE_MODEL` overrides the Muse model.
