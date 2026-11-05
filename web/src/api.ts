@@ -96,6 +96,39 @@ export interface AppState {
   providers: Provider[];
 }
 
+// The inbox review: people waiting on a reply, and bulk senders to clean up.
+export interface ReviewItem {
+  from: string;
+  fromAddress: string;
+  to: string;
+  subject: string;
+  date: string;
+  messageId: string;
+  snippet: string;
+  folder: string;
+  unread: boolean;
+  more: number;
+}
+
+export interface NoisySender {
+  name: string;
+  address: string;
+  count: number;
+  unread: number;
+  unsubscribe: "one-click" | "email" | "link" | "none";
+  link?: string;
+  done?: "unsubscribed" | "archived";
+}
+
+export interface MailReview {
+  days: number;
+  scanned: number;
+  unanswered: ReviewItem[];
+  noisy: NoisySender[];
+  partial: boolean;
+  at: string;
+}
+
 export type TeamEvent =
   | { type: "turn"; turnId: string }
   | { type: "routing"; seats: string[]; reason: string; direct: boolean; mode?: TurnMode }
@@ -110,6 +143,7 @@ export type TeamEvent =
   | { type: "memory"; added: MemoryItem[] }
   | { type: "draft"; draft: EmailDraft }
   | { type: "private"; seats: string[] }
+  | { type: "review"; review: MailReview }
   | { type: "done" };
 
 export class AuthError extends Error {}
@@ -141,6 +175,8 @@ export const api = {
     }),
   setEmailEnabled: (enabled: boolean) =>
     call<{ enabled: boolean }>("/api/email/enabled", { method: "POST", body: JSON.stringify({ enabled }) }),
+  cleanUpSender: (address: string, action: "unsubscribe" | "archive") =>
+    call<{ message: string }>("/api/mail/cleanup", { method: "POST", body: JSON.stringify({ address, action }) }),
   testConnections: () => call<{ mail: string; calendar: string }>("/api/connections/test"),
   editDraft: (id: number, to: string, subject: string, body: string) =>
     call<{ drafts: EmailDraft[] }>(`/api/drafts/${id}`, { method: "PUT", body: JSON.stringify({ to, subject, body }) }),

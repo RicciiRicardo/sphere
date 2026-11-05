@@ -16,6 +16,7 @@ import { DRAFT_FORMAT, extractDrafts, storeDrafts, type EmailDraft } from "./dra
 import { formatInbox, mailConfigured, recentInbox, searchMailbox } from "./mail.js";
 import { calendarConfigured, formatEvents, upcomingEvents } from "./calendar.js";
 import { emailEnabled, logEmailAccess } from "./settings.js";
+import { formatReview, reviewMailbox, type MailReview } from "./review.js";
 
 const TZ = process.env.SPHERE_TIMEZONE?.trim() || "America/New_York";
 
@@ -33,6 +34,7 @@ export type TeamEvent =
   | { type: "memory"; added: MemoryItem[] }
   | { type: "draft"; draft: EmailDraft }
   | { type: "private"; seats: string[] }
+  | { type: "review"; review: MailReview }
   | { type: "done" };
 
 type Emit = (event: TeamEvent) => void;
@@ -136,6 +138,12 @@ const LIVE_TOPICS =
 const SEARCH_REQUEST =
   /\b(find|search|look(?:ing)? (?:for|through|up)|dig (?:up|out)|locate|pull up|track down|where(?:'s| is| are)|any(?:thing)? (?:from|about|on|regarding))\b/i;
 
+// "Review my inbox", "what emails am I missing", "clean up my mailbox".
+const MAIL_WORD = /\b(e-?mails?|inbox|mailbox|mail)\b/i;
+const REVIEW_WORD =
+  /\b(review|audit|triage|sweep|clean(?:[- ]?up| out)?|declutter|go through|missed|missing|missing out|unanswered|unreplied|(?:haven't|didn't|never) (?:replied|answered|responded|gotten back)|fell through|slipp(?:ed|ing) through|opportunit(?:y|ies))\b/i;
+const isReviewRequest = (text: string) => MAIL_WORD.test(text) && REVIEW_WORD.test(text);
+
 const MailSearch = z.object({
   search: z.boolean(),
   terms: z.array(z.string()),
@@ -164,8 +172,13 @@ async function searchTerms(text: string): Promise<{ terms: string[]; days: numbe
 // The private block: calendar and inbox, only when the message is about them
 // or it's the morning briefing, and only while the email kill switch is on.
 // A connection failure becomes a note, not an error.
-async function privateContext(text: string, briefing: boolean, emit: Emit): Promise<{ block: string; items: number }> {
-  if (!briefing && !LIVE_TOPICS.test(text)) return { block: "", items: 0 };
+async function privateContext(
+  turnId: string,
+  text: string,
+  briefing: boolean,
+  emit: Emit,
+): Promise<{ block: string; items: number }> {
+  if (!briefing && !LIVE_TOPICS.test(text) && !isReviewRequest(text)) return { block: "", items: 0 };
   // The kill switch stops all private reads, calendar included.
   if (!(await emailEnabled())) return { block: "", items: 0 };
   const parts: string[] = [];
@@ -180,7 +193,20 @@ async function privateContext(text: string, briefing: boolean, emit: Emit): Prom
       emit({ type: "notice", text: `Couldn't read your calendar: ${err instanceof Error ? err.message : String(err)}` });
     }
   }
-  if (mailConfigured()) {
+  const review = mailConfigured() && !briefing && isReviewRequest(text);
+  if (review) {
+    try {
+      emit({ type: "notice", text: "Reviewing the last 45 days of your inbox and Sent folder. This takes up to a minute." });
+      const r = await reviewMailbox(45);
+      items += r.unanswered.length;
+      await record(turnId, "system", "review", JSON.stringify(r));
+      emit({ type: "review", review: r });
+      parts.push(formatReview(r, TZ));
+    } catch (err) {
+      console.error("inbox review failed", err);
+      emit({ type: "notice", text: `Couldn't review your inbox: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  } else if (mailConfigured()) {
     try {
       const inbox = await recentInbox();
       items += inbox.length;
@@ -190,7 +216,7 @@ async function privateContext(text: string, briefing: boolean, emit: Emit): Prom
       emit({ type: "notice", text: `Couldn't read your email: ${err instanceof Error ? err.message : String(err)}` });
     }
   }
-  const search = mailConfigured() && !briefing ? await searchTerms(text) : undefined;
+  const search = mailConfigured() && !briefing && !review ? await searchTerms(text) : undefined;
   if (search) {
     try {
       const hits = await searchMailbox(search.terms, search.days);
@@ -382,7 +408,7 @@ export async function runTurn(text: string, emit: Emit, requested: TurnMode = "a
             : "auto";
 
   const now = new Date().toLocaleString("en-US", { timeZone: TZ, dateStyle: "full", timeStyle: "short" });
-  const priv = await privateContext(text, mode === "briefing", emit);
+  const priv = await privateContext(turnId, text, mode === "briefing", emit);
   const ctx: TurnContext = {
     turnId,
     text,

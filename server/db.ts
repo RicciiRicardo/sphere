@@ -127,5 +127,13 @@ export async function migrate() {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    -- Bulk senders Ricardo unsubscribed from or archived in the inbox review.
+    CREATE TABLE IF NOT EXISTS mail_cleanup (
+      id SERIAL PRIMARY KEY,
+      address TEXT NOT NULL,
+      action TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
 }

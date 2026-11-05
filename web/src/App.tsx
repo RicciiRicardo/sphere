@@ -15,6 +15,8 @@ import {
   type TeamEvent,
   type TurnMode,
   type Interruption,
+  type MailReview,
+  type NoisySender,
 } from "./api";
 import {
   canListen,
@@ -51,6 +53,7 @@ interface Turn {
   thinking: string[];
   live: boolean;
   private?: boolean;
+  review?: MailReview;
 }
 
 const SEAT_COLORS: Record<string, string> = {
@@ -112,6 +115,13 @@ function turnsFromMessages(messages: StoredMessage[]): Turn[] {
     else if (m.kind === "error") t.replies.push({ seatId: m.speaker, error: m.content });
     else if (m.kind === "briefing") t.final = { seatId: m.speaker, text: m.content };
     else if (m.kind === "notice") t.notices.push(m.content);
+    else if (m.kind === "review") {
+      try {
+        t.review = JSON.parse(m.content);
+      } catch {
+        /* ignore malformed rows */
+      }
+    }
   }
   // A seat spoken to by name answers on its own; its reply is the final one.
   for (const t of turns.values()) {
@@ -135,6 +145,8 @@ function applyEvent(turn: Turn, e: TeamEvent): Turn {
       return { ...turn, winner: { seatId: e.seatId, text: e.text } };
     case "private":
       return { ...turn, private: true };
+    case "review":
+      return { ...turn, review: e.review };
     case "thinking":
       return { ...turn, thinking: [...turn.thinking, e.seatId] };
     case "seat":
@@ -526,6 +538,17 @@ export function App() {
               {VOICE_LABEL[voiceMode]}
             </button>
           )}
+          {state.connections.mail.configured && state.connections.mail.enabled && (
+            <button
+              className="ghost"
+              disabled={busy}
+              title="Who's waiting on a reply, by company, and which bulk senders to clean up"
+              onClick={() => send("Review my inbox: who's waiting on a reply from me, and where am I missing opportunities across my companies?")}
+            >
+              <span className="wide-only">Inbox review</span>
+              <span className="mobile-only">Inbox</span>
+            </button>
+          )}
           <button disabled={busy} onClick={() => send("Good morning, team.", "briefing")}>
             <span className="wide-only">Morning briefing</span>
             <span className="mobile-only">Briefing</span>
@@ -594,6 +617,7 @@ export function App() {
             mailReady={state.connections.mail.configured}
             onDrafts={(drafts) => setState((s) => (s ? { ...s, drafts } : s))}
             onAssign={(seatId) => send(`${seatById[seatId]?.name ?? seatId}, you take this one. Go ahead with your plan.`)}
+            onAsk={send}
           />
         ))}
         <div ref={threadEnd} />
@@ -732,10 +756,12 @@ function TurnView({
   verdictFor,
   onRate,
   onAssign,
+  onAsk,
   drafts,
   mailReady,
   onDrafts,
 }: {
+  onAsk: (text: string) => void;
   drafts: EmailDraft[];
   mailReady: boolean;
   onDrafts: (drafts: EmailDraft[]) => void;
@@ -858,6 +884,7 @@ function TurnView({
           </div>
         </div>
       )}
+      {turn.review && <ReviewCard review={turn.review} busy={busy} onAsk={onAsk} />}
       {drafts.map((d) => (
         <DraftCard key={d.id} draft={d} mailReady={mailReady} onDrafts={onDrafts} />
       ))}
@@ -975,6 +1002,120 @@ const DRAFT_STATUS: Record<EmailDraft["status"], string> = {
   sent: "Sent",
   discarded: "Discarded",
 };
+
+const daysAgo = (iso: string) => Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000));
+
+// The inbox review: people waiting on Ricardo, and bulk senders he can clean up.
+function ReviewCard({ review, busy, onAsk }: { review: MailReview; busy: boolean; onAsk: (text: string) => void }) {
+  const [noisy, setNoisy] = useState<NoisySender[]>(review.noisy);
+  const [working, setWorking] = useState("");
+  const [note, setNote] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const people = showAll ? review.unanswered : review.unanswered.slice(0, 12);
+
+  const clean = async (n: NoisySender, action: "unsubscribe" | "archive") => {
+    const question =
+      action === "archive"
+        ? `Move all ${n.name} emails (${n.address}) from your inbox to Archive? Nothing is deleted.`
+        : n.unsubscribe === "email"
+          ? `Unsubscribe from ${n.name}? Sphere sends their list an unsubscribe email from your address.`
+          : `Unsubscribe from ${n.name} (${n.address})?`;
+    if (!confirm(question)) return;
+    setWorking(`${n.address}:${action}`);
+    setNote("");
+    try {
+      const res = await api.cleanUpSender(n.address, action);
+      setNote(res.message);
+      setNoisy((list) => list.map((x) => (x.address === n.address ? { ...x, done: action === "archive" ? "archived" : "unsubscribed" } : x)));
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWorking("");
+    }
+  };
+
+  return (
+    <div className="review">
+      <div className="final-head">
+        <span>📥 Inbox review</span>
+        <span className="muted">
+          Last {review.days} days · {review.scanned} emails{review.partial ? " · partial, the scan ran out of time" : ""}
+        </span>
+      </div>
+      <h3 className="round-label">Waiting on you ({review.unanswered.length})</h3>
+      {review.unanswered.length === 0 && <p className="muted">Everyone who wrote in this period got a reply.</p>}
+      <ul className="review-list">
+        {people.map((m) => (
+          <li key={`${m.folder}:${m.messageId || m.fromAddress}`}>
+            <div className="review-main">
+              <strong>{m.from}</strong>
+              <span className="muted">
+                {" "}
+                · {daysAgo(m.date)}d{m.more ? ` · +${m.more} more` : ""}
+                {m.folder !== "INBOX" ? ` · in ${m.folder}` : ""}
+                {m.unread ? " · unopened" : ""}
+              </span>
+              <div>{m.subject}</div>
+              {m.snippet && <div className="muted review-snippet">{m.snippet}</div>}
+            </div>
+            <button
+              className="ghost small"
+              disabled={busy}
+              onClick={() =>
+                onAsk(`Draft a reply to ${m.from} <${m.fromAddress}> about "${m.subject}" [message-id ${m.messageId}].`)
+              }
+            >
+              Draft reply
+            </button>
+          </li>
+        ))}
+      </ul>
+      {review.unanswered.length > people.length && (
+        <button className="ghost small" onClick={() => setShowAll(true)}>
+          Show all {review.unanswered.length}
+        </button>
+      )}
+      {noisy.length > 0 && (
+        <>
+          <h3 className="round-label">Cluttering your inbox ({noisy.length})</h3>
+          <ul className="review-list">
+            {noisy.map((n) => (
+              <li key={n.address}>
+                <div className="review-main">
+                  <strong>{n.name}</strong>
+                  <span className="muted">
+                    {" "}
+                    · {n.count} emails, {n.unread} unopened
+                  </span>
+                  <div className="muted">{n.address}</div>
+                </div>
+                {n.done ? (
+                  <span className="muted">{n.done === "archived" ? "Archived" : "Unsubscribed"}</span>
+                ) : (
+                  <span className="row">
+                    {n.unsubscribe === "one-click" || n.unsubscribe === "email" ? (
+                      <button className="ghost small" disabled={Boolean(working)} onClick={() => clean(n, "unsubscribe")}>
+                        {working === `${n.address}:unsubscribe` ? "…" : "Unsubscribe"}
+                      </button>
+                    ) : n.link ? (
+                      <a className="button-link" href={n.link} target="_blank" rel="noreferrer noopener">
+                        Unsubscribe page
+                      </a>
+                    ) : null}
+                    <button className="ghost small" disabled={Boolean(working)} onClick={() => clean(n, "archive")}>
+                      {working === `${n.address}:archive` ? "…" : "Archive"}
+                    </button>
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {note && <p className="muted">{note}</p>}
+    </div>
+  );
+}
 
 function DraftCard({ draft, mailReady, onDrafts }: { draft: EmailDraft; mailReady: boolean; onDrafts: (d: EmailDraft[]) => void }) {
   const [to, setTo] = useState(draft.to_addr);

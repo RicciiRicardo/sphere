@@ -31,7 +31,7 @@ export interface InboxMessage {
 
 // Headers plus a text snippet for each uid, oldest first. Only the first
 // 32 KB of each message: enough for a snippet, without the attachments.
-async function fetchMessages(client: ImapFlow, uids: number[], snippet: number, folder?: string): Promise<InboxMessage[]> {
+export async function fetchMessages(client: ImapFlow, uids: number[], snippet: number, folder?: string): Promise<InboxMessage[]> {
   const out: InboxMessage[] = [];
   if (!uids.length) return out;
   for await (const msg of client.fetch(uids, { uid: true, flags: true, envelope: true, source: { maxLength: 32_768 } }, { uid: true })) {
@@ -63,7 +63,7 @@ function imap() {
   });
 }
 
-async function withImap<T>(fn: (client: ImapFlow) => Promise<T>): Promise<T> {
+export async function withImap<T>(fn: (client: ImapFlow) => Promise<T>): Promise<T> {
   const client = imap();
   await client.connect();
   try {
@@ -194,7 +194,7 @@ function messageOptions(email: OutgoingEmail) {
   };
 }
 
-async function folderFor(client: ImapFlow, use: "\\Drafts" | "\\Sent", fallback: RegExp): Promise<string | undefined> {
+export async function folderFor(client: ImapFlow, use: "\\Drafts" | "\\Sent", fallback: RegExp): Promise<string | undefined> {
   const folders = await client.list();
   return (folders.find((f) => f.specialUse === use) ?? folders.find((f) => fallback.test(f.path)))?.path;
 }
