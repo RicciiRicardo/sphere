@@ -91,6 +91,47 @@ function voiceFor(seatId: string): SpeechSynthesisVoice | undefined {
 interface Line {
   text: string;
   seatId: string;
+  // The seat's natural voice, fetched from the server as soon as the line is
+  // queued so it's ready by its turn. Undefined means use the browser's voice.
+  audio?: Promise<string | undefined>;
+  abort?: AbortController;
+}
+
+// Natural voices come from the server when it has them set up; otherwise,
+// and whenever a request fails, the browser's own speech is used.
+let naturalVoices = false;
+export function setNaturalVoices(on: boolean) {
+  naturalVoices = on;
+}
+
+let player: HTMLAudioElement | null = null;
+
+function fetchAudio(line: Line): Promise<string | undefined> {
+  line.abort = new AbortController();
+  return fetch("/api/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: speakable(line.text), seatId: line.seatId }),
+    signal: line.abort.signal,
+  })
+    .then(async (r) => (r.ok ? URL.createObjectURL(await r.blob()) : undefined))
+    .catch(() => undefined);
+}
+
+function discard(line: Line | null) {
+  if (!line) return;
+  line.abort?.abort();
+  line.audio?.then((url) => url && URL.revokeObjectURL(url));
+}
+
+function silence() {
+  if (player) {
+    player.onended = null;
+    player.onerror = null;
+    player.pause();
+    player = null;
+  }
+  speechSynthesis.cancel();
 }
 
 export interface SpeakingState {
@@ -141,16 +182,45 @@ function playNext() {
     notify();
     return;
   }
-  current = queue.shift()!;
+  const line = (current = queue.shift()!);
   notify();
   const gen = generation;
-  const parts = chunks(speakable(current.text));
-  const voice = voiceFor(current.seatId);
   const done = () => {
     if (gen !== generation) return;
+    discard(line);
     current = null;
     playNext();
   };
+  if (!line.audio) return browserSpeak(line, done);
+  line.audio.then((url) => {
+    if (gen !== generation) return;
+    if (!url) return browserSpeak(line, done);
+    // Each line ends exactly once: by finishing, or by falling back to the
+    // browser's voice if the audio can't play (a late error must not replay it).
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      done();
+    };
+    const fallBack = () => {
+      if (settled || gen !== generation) return;
+      settled = true;
+      if (player === audio) player = null;
+      audio.pause();
+      browserSpeak(line, done);
+    };
+    const audio = (player = new Audio(url));
+    audio.onended = finish;
+    audio.onerror = fallBack;
+    // Autoplay can be refused (Safari, after a long wait); fall back rather than go silent.
+    audio.play().catch(fallBack);
+  });
+}
+
+function browserSpeak(line: Line, done: () => void) {
+  const parts = chunks(speakable(line.text));
+  const voice = voiceFor(line.seatId);
   if (!parts.length) return done();
   parts.forEach((part, i) => {
     const utterance = new SpeechSynthesisUtterance(part);
@@ -167,7 +237,9 @@ function playNext() {
 // Adds a line to the end of the queue.
 export function enqueueSpeech(text: string, seatId: string) {
   if (!canSpeak() || !text.trim() || held) return;
-  queue.push({ text, seatId });
+  const line: Line = { text, seatId };
+  if (naturalVoices) line.audio = fetchAudio(line);
+  queue.push(line);
   playNext();
 }
 
@@ -182,17 +254,19 @@ export function speak(text: string, seatId: string) {
 export function skipSpeaker() {
   if (!canSpeak()) return;
   generation++;
+  discard(current);
   current = null;
-  speechSynthesis.cancel();
+  silence();
   playNext();
 }
 
 export function stopSpeaking() {
   if (!canSpeak()) return;
   generation++;
-  queue.length = 0;
+  discard(current);
+  queue.splice(0).forEach(discard);
   current = null;
-  speechSynthesis.cancel();
+  silence();
   notify();
 }
 

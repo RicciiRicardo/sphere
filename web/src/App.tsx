@@ -23,6 +23,7 @@ import {
   listen,
   onSpeaking,
   releaseSpeech,
+  setNaturalVoices,
   skipSpeaker,
   speak,
   stopSpeaking,
@@ -196,6 +197,8 @@ export function App() {
   const [voiceMode, setVoiceMode] = useState<VoiceMode>(readVoiceMode);
   const [speaking, setSpeaking] = useState<SpeakingState>({ seatId: null, queued: 0 });
   useEffect(() => onSpeaking(setSpeaking), []);
+  const naturalVoices = Boolean(state?.connections.voice?.enabled);
+  useEffect(() => setNaturalVoices(naturalVoices), [naturalVoices]);
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<"none" | "team" | "memory">("none");
   // On a wide screen the memory column can be hidden to keep the focus on the conversation.
@@ -728,6 +731,10 @@ function ConnectionsBox({
       <p className="conn-line" title="Routes messages, judges Pitch bids and keeps the team memory">
         <span className="dot ok" />
         Engine: {connections.engine.label}
+      </p>
+      <p className="conn-line">
+        <span className={`dot ${connections.voice?.enabled ? "ok" : "off"}`} />
+        Voices: {connections.voice?.enabled ? `natural (OpenAI ${connections.voice.model})` : "browser built-in"}
       </p>
       <p className="conn-line">
         <span className={`dot ${connections.mail.configured && connections.mail.enabled ? "ok" : "off"}`} />
