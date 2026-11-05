@@ -15,7 +15,20 @@ import {
   type TeamEvent,
   type TurnMode,
 } from "./api";
-import { canListen, canSpeak, listen, speak, stopSpeaking, type Listener } from "./voice";
+import {
+  canListen,
+  canSpeak,
+  enqueueSpeech,
+  holdSpeech,
+  listen,
+  onSpeaking,
+  releaseSpeech,
+  skipSpeaker,
+  speak,
+  stopSpeaking,
+  type Listener,
+  type SpeakingState,
+} from "./voice";
 
 interface Turn {
   id: string;
@@ -141,6 +154,22 @@ function applyEvent(turn: Turn, e: TeamEvent): Turn {
   }
 }
 
+// Who the app reads aloud: every seat as it speaks, only the chair's answer, or nobody.
+type VoiceMode = "all" | "chair" | "off";
+const VOICE_LABEL: Record<VoiceMode, string> = { all: "Voice: everyone", chair: "Voice: chair", off: "Muted" };
+const NEXT_VOICE: Record<VoiceMode, VoiceMode> = { all: "chair", chair: "off", off: "all" };
+
+function readVoiceMode(): VoiceMode {
+  try {
+    const v = localStorage.getItem("sphere.voiceMode");
+    if (v === "all" || v === "chair" || v === "off") return v;
+    // Before modes existed, voice was on (the chair) or muted.
+    return localStorage.getItem("sphere.voice") === "0" ? "off" : "all";
+  } catch {
+    return "all";
+  }
+}
+
 function readPref(key: string, fallback: boolean) {
   try {
     const v = localStorage.getItem(key);
@@ -164,7 +193,9 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
-  const [voiceOn, setVoiceOn] = useState(() => readPref("sphere.voice", true));
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>(readVoiceMode);
+  const [speaking, setSpeaking] = useState<SpeakingState>({ seatId: null, queued: 0 });
+  useEffect(() => onSpeaking(setSpeaking), []);
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<"none" | "team" | "memory">("none");
   // On a wide screen the memory column can be hidden to keep the focus on the conversation.
@@ -213,6 +244,7 @@ export function App() {
       setError("");
       setBusy(true);
       stopSpeaking();
+      releaseSpeech();
       const placeholderId = `live-${Date.now()}`;
       setTurns((ts) => [
         ...ts,
@@ -235,7 +267,8 @@ export function App() {
             setState((s) => (s ? { ...s, memory: [...e.added, ...s.memory] } : s));
             return;
           }
-          if (e.type === "final" && voiceOn) speak(e.text, e.seatId);
+          if (e.type === "final" && voiceMode !== "off") enqueueSpeech(e.text, e.seatId);
+          if (e.type === "seat" && voiceMode === "all") enqueueSpeech(e.text, e.seatId);
           setTurns((ts) => ts.map((t) => (t.id === currentId ? applyEvent(t, e) : t)));
         });
         // A chair change happens on the server; refresh the roster.
@@ -249,7 +282,7 @@ export function App() {
         setBusy(false);
       }
     },
-    [busy, voiceOn],
+    [busy, voiceMode],
   );
 
   // Thumbs up/down on a seat's answer; tapping the same verdict again clears it.
@@ -271,7 +304,8 @@ export function App() {
       listener.current?.stop();
       return;
     }
-    stopSpeaking();
+    // Starting to talk quiets the team until the next message goes out.
+    holdSpeech();
     setError("");
     setListening(true);
     listener.current = listen(
@@ -288,11 +322,15 @@ export function App() {
     );
   };
 
-  const toggleVoice = () => {
-    const next = !voiceOn;
-    setVoiceOn(next);
-    writePref("sphere.voice", next);
-    if (!next) stopSpeaking();
+  const cycleVoice = () => {
+    const next = NEXT_VOICE[voiceMode];
+    setVoiceMode(next);
+    try {
+      localStorage.setItem("sphere.voiceMode", next);
+    } catch {
+      /* storage unavailable */
+    }
+    if (next === "off") stopSpeaking();
   };
 
   if (needsLogin) return <Login onDone={load} />;
@@ -321,8 +359,12 @@ export function App() {
             {memoryHidden ? "Show memory" : "Hide memory"}
           </button>
           {canSpeak() && (
-            <button className={`ghost ${voiceOn ? "on" : ""}`} onClick={toggleVoice} title="Speak the team's replies aloud">
-              {voiceOn ? "Voice" : "Muted"}
+            <button
+              className={`ghost ${voiceMode !== "off" ? "on" : ""}`}
+              onClick={cycleVoice}
+              title="Read aloud: every seat as it speaks, only the chair, or nobody"
+            >
+              {VOICE_LABEL[voiceMode]}
             </button>
           )}
           <button disabled={busy} onClick={() => send("Good morning, team.", "briefing")}>
@@ -415,6 +457,24 @@ export function App() {
       </aside>
 
       <footer className="composer">
+        {speaking.seatId && (
+          <div className="speaking">
+            <span
+              className="dot pulse"
+              style={{ background: colorFor(speaking.seatId, Math.max(0, seats.findIndex((s) => s.id === speaking.seatId))) }}
+            />
+            <span>
+              {seatById[speaking.seatId]?.name ?? speaking.seatId} is speaking
+              {speaking.queued > 0 && <span className="muted"> · {speaking.queued} more</span>}
+            </span>
+            <button type="button" className="ghost small" onClick={skipSpeaker}>
+              Skip
+            </button>
+            <button type="button" className="ghost small" onClick={holdSpeech}>
+              Stop
+            </button>
+          </div>
+        )}
         {error && <p className="error">{error}</p>}
         <div className="modes" role="radiogroup" aria-label="How the team answers">
           {(

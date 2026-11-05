@@ -86,16 +86,123 @@ function voiceFor(seatId: string): SpeechSynthesisVoice | undefined {
   return voices[hash % voices.length];
 }
 
+// Replies are spoken one at a time, in order, so a Roundtable sounds like a
+// conversation instead of everyone talking at once.
+interface Line {
+  text: string;
+  seatId: string;
+}
+
+export interface SpeakingState {
+  seatId: string | null;
+  queued: number;
+}
+
+const queue: Line[] = [];
+let current: Line | null = null;
+let listeners: ((s: SpeakingState) => void)[] = [];
+// Set by the Stop button: the rest of this turn stays quiet until Ricardo
+// sends something new or taps Play.
+let held = false;
+// Bumped by stop and skip, so a line that was cut off doesn't start the next one twice.
+let generation = 0;
+
+function notify() {
+  const state = { seatId: current?.seatId ?? null, queued: queue.length };
+  for (const l of listeners) l(state);
+}
+
+export function onSpeaking(listener: (s: SpeakingState) => void): () => void {
+  listeners.push(listener);
+  return () => {
+    listeners = listeners.filter((l) => l !== listener);
+  };
+}
+
+// Chrome stops long utterances after about 15 seconds, so each line is
+// spoken in sentence-sized pieces.
+function chunks(text: string): string[] {
+  const sentences = text.match(/[^.!?\n]+[.!?]*\s*/g) ?? [text];
+  const out: string[] = [];
+  let buf = "";
+  for (const s of sentences) {
+    if ((buf + s).length > 220 && buf) {
+      out.push(buf.trim());
+      buf = "";
+    }
+    buf += s;
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+
+function playNext() {
+  if (current || !queue.length) {
+    notify();
+    return;
+  }
+  current = queue.shift()!;
+  notify();
+  const gen = generation;
+  const parts = chunks(speakable(current.text));
+  const voice = voiceFor(current.seatId);
+  const done = () => {
+    if (gen !== generation) return;
+    current = null;
+    playNext();
+  };
+  if (!parts.length) return done();
+  parts.forEach((part, i) => {
+    const utterance = new SpeechSynthesisUtterance(part);
+    if (voice) utterance.voice = voice;
+    utterance.rate = 1.05;
+    if (i === parts.length - 1) {
+      utterance.onend = done;
+      utterance.onerror = done;
+    }
+    speechSynthesis.speak(utterance);
+  });
+}
+
+// Adds a line to the end of the queue.
+export function enqueueSpeech(text: string, seatId: string) {
+  if (!canSpeak() || !text.trim() || held) return;
+  queue.push({ text, seatId });
+  playNext();
+}
+
+// Drops whatever is playing or queued and says this instead.
 export function speak(text: string, seatId: string) {
+  stopSpeaking();
+  held = false;
+  enqueueSpeech(text, seatId);
+}
+
+// Cuts off the current speaker and moves on to the next one.
+export function skipSpeaker() {
   if (!canSpeak()) return;
+  generation++;
+  current = null;
   speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(speakable(text));
-  const voice = voiceFor(seatId);
-  if (voice) utterance.voice = voice;
-  utterance.rate = 1.05;
-  speechSynthesis.speak(utterance);
+  playNext();
 }
 
 export function stopSpeaking() {
-  if (canSpeak()) speechSynthesis.cancel();
+  if (!canSpeak()) return;
+  generation++;
+  queue.length = 0;
+  current = null;
+  speechSynthesis.cancel();
+  notify();
+}
+
+// Stop button: silence now and for the rest of this turn.
+export function holdSpeech() {
+  stopSpeaking();
+  held = true;
+}
+
+// A new turn may speak again.
+export function releaseSpeech() {
+  held = false;
 }
