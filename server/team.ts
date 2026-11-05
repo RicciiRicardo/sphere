@@ -218,6 +218,9 @@ const isPitchRequest = (text: string) => /\b(who wants (this|it)|pitch (for|me|i
 
 interface TurnContext {
   turnId: string;
+  // Aborted when Ricardo cuts in: seats not yet started are skipped, and
+  // replies that finish afterwards aren't recorded, since he never heard them.
+  signal?: AbortSignal;
   text: string;
   // The seats working this turn. In a private turn, only those with email access.
   seats: SeatView[];
@@ -232,6 +235,8 @@ interface TurnContext {
   privateItems: number;
   logged: Set<string>;
 }
+
+const stopped = (ctx: TurnContext) => Boolean(ctx.signal?.aborted);
 
 // What a seat sees. Private memory, private conversation and this turn's inbox
 // go only to seats with email access, and each such read is logged.
@@ -258,6 +263,7 @@ async function askSeat(
   kind: "seat" | "rebuttal" | "bid" | "final" = "seat",
 ): Promise<string | undefined> {
   const { turnId, emit } = ctx;
+  if (stopped(ctx)) return undefined;
   if (!seat.ready) {
     emit({ type: "seat_error", seatId: seat.id, error: `${seat.name} isn't connected yet (no API key).` });
     return undefined;
@@ -265,6 +271,7 @@ async function askSeat(
   emit({ type: "thinking", seatId: seat.id });
   try {
     const reply = await complete({ provider: seat.provider, model: seat.model, system, prompt, speaker: seat.name });
+    if (stopped(ctx)) return undefined;
     if (kind !== "bid" && kind !== "final") {
       await record(turnId, seat.id, kind, reply);
       emit({ type: "seat", seatId: seat.id, text: reply, round: kind === "rebuttal" ? 2 : undefined });
@@ -283,6 +290,7 @@ async function askSeat(
 // The reply Ricardo gets: pulls any email drafts out into their own cards,
 // then records and shows the rest.
 async function finalize(ctx: TurnContext, seatId: string, text: string): Promise<string> {
+  if (stopped(ctx)) return "";
   const { clean, drafts } = mailConfigured() ? extractDrafts(text) : { clean: text, drafts: [] };
   const shown = clean || (drafts.length ? "I've drafted the email below for you to review." : "");
   await record(ctx.turnId, seatId, "briefing", shown);
@@ -304,6 +312,7 @@ async function chairCloses(ctx: TurnContext, instruction: string): Promise<strin
     });
     return "";
   }
+  if (stopped(ctx)) return "";
   ctx.emit({ type: "thinking", seatId: chair.id });
   try {
     const text = await complete({
@@ -323,7 +332,19 @@ async function chairCloses(ctx: TurnContext, instruction: string): Promise<strin
   }
 }
 
-export async function runTurn(text: string, emit: Emit, requested: TurnMode = "auto") {
+// Live table: Ricardo cut in while a seat was speaking. heard is roughly what
+// he heard of that seat before he cut in.
+export interface Interruption {
+  seatId: string;
+  heard: string;
+}
+
+export interface TurnOptions {
+  signal?: AbortSignal;
+  interrupted?: Interruption;
+}
+
+export async function runTurn(text: string, emit: Emit, requested: TurnMode = "auto", opts: TurnOptions = {}) {
   const turnId = randomUUID();
   emit({ type: "turn", turnId });
   await record(turnId, "you", "user", text);
@@ -343,7 +364,11 @@ export async function runTurn(text: string, emit: Emit, requested: TurnMode = "a
   const names = Object.fromEntries(seats.map((s) => [s.id, s.name]));
   const lines = (await recentTranscript()).slice(0, -1);
   const transcript = formatTranscript(lines, names, true);
-  const promptOf = (t: string) => `CONVERSATION SO FAR\n${t}\n\nRICARDO NOW SAYS\n${text}`;
+  const cutIn = opts.interrupted && names[opts.interrupted.seatId] ? opts.interrupted : undefined;
+  const interruption = cutIn
+    ? `\n\nRICARDO CUT IN while ${names[cutIn.seatId]} was speaking aloud. He heard ${names[cutIn.seatId]} only up to about here: "${cutIn.heard}". He did not hear the rest of that reply or anything after it in that turn, so don't assume he knows it. Respond to what he just said first, briefly, the way a good meeting would when the boss speaks up; bring back an unheard point only if it really matters.`
+    : "";
+  const promptOf = (t: string) => `CONVERSATION SO FAR\n${t}${interruption}\n\nRICARDO NOW SAYS\n${text}`;
 
   const mode: TurnMode =
     requested !== "auto"
@@ -371,6 +396,7 @@ export async function runTurn(text: string, emit: Emit, requested: TurnMode = "a
     privateBlock: priv.block,
     privateItems: priv.items,
     logged: new Set(),
+    signal: opts.signal,
   };
 
   // A turn that reads Ricardo's email is worked only by seats allowed to.
@@ -391,7 +417,9 @@ export async function runTurn(text: string, emit: Emit, requested: TurnMode = "a
   else if (mode === "pitch") finalText = await runPitch(ctx);
   else finalText = await runRouted(ctx, mode === "briefing", transcript);
 
-  if (finalText) {
+  if (opts.signal?.aborted) {
+    await record(turnId, "system", "notice", "Ricardo cut in here; the rest of this turn wasn't heard.");
+  } else if (finalText) {
     try {
       const added = await extractMemory(
         text,
@@ -614,6 +642,7 @@ async function runPitch(ctx: TurnContext): Promise<string> {
   await record(ctx.turnId, "coordinator", "winner", JSON.stringify({ seatId: winner.id, note }));
   ctx.emit({ type: "winner", seatId: winner.id, text: note });
 
+  if (stopped(ctx)) return "";
   ctx.emit({ type: "thinking", seatId: winner.id });
   try {
     const text = await complete({

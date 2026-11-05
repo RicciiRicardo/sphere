@@ -105,6 +105,9 @@ export function setNaturalVoices(on: boolean) {
 }
 
 let player: HTMLAudioElement | null = null;
+// How far the browser's voice has got through the current line, for progress().
+let browserParts: string[] = [];
+let browserIndex = -1;
 
 function fetchAudio(line: Line): Promise<string | undefined> {
   line.abort = new AbortController();
@@ -220,10 +223,15 @@ function playNext() {
 
 function browserSpeak(line: Line, done: () => void) {
   const parts = chunks(speakable(line.text));
+  browserParts = parts;
+  browserIndex = -1;
   const voice = voiceFor(line.seatId);
   if (!parts.length) return done();
   parts.forEach((part, i) => {
     const utterance = new SpeechSynthesisUtterance(part);
+    utterance.onstart = () => {
+      browserIndex = i;
+    };
     if (voice) utterance.voice = voice;
     utterance.rate = 1.05;
     if (i === parts.length - 1) {
@@ -279,4 +287,115 @@ export function holdSpeech() {
 // A new turn may speak again.
 export function releaseSpeech() {
   held = false;
+}
+
+export const isSpeaking = () => current !== null;
+
+// Roughly what Ricardo has heard of the line being spoken right now: the last
+// stretch of it up to the current playback position.
+export function progress(): { seatId: string; heard: string } | undefined {
+  if (!current) return undefined;
+  const words = speakable(current.text).split(/\s+/).filter(Boolean);
+  let fraction = 0.5;
+  if (player && Number.isFinite(player.duration) && player.duration > 0) fraction = player.currentTime / player.duration;
+  else if (browserParts.length) fraction = (browserIndex + 1) / browserParts.length;
+  const upTo = Math.max(1, Math.round(words.length * Math.min(1, fraction)));
+  return { seatId: current.seatId, heard: words.slice(Math.max(0, upTo - 60), upTo).join(" ") };
+}
+
+export interface LiveHandlers {
+  // Ricardo started speaking (over the team, or into silence).
+  onBargeIn(): void;
+  // The running transcript of what he's saying.
+  onHeard(text: string): void;
+  // He finished a sentence (a pause of about 1.4 seconds).
+  onUtterance(text: string): void;
+  onError(message: string): void;
+}
+
+// Words that cut the team off on their own, before a full sentence.
+const CUT_WORDS = /^(stop|wait|hold on|hang on|pause|quiet|enough|okay stop|ok stop)\b/i;
+
+// The live table: the mic stays open, Ricardo can talk over the team to cut
+// them off, and each sentence goes to the team when he pauses. The mic also
+// hears the speakers, so while a seat is talking, words that mostly match
+// what it's saying are ignored as its own echo (headphones avoid this).
+export function liveListen(h: LiveHandlers): Listener {
+  const Ctor = recognitionCtor();
+  if (!Ctor) {
+    h.onError("This browser can't listen. Try Chrome or Safari.");
+    return { stop() {} };
+  }
+  let active = true;
+  let rec: Recognition | null = null;
+  let finalText = "";
+  let interim = "";
+  let speaking = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const isEcho = (said: string) => {
+    if (!current) return false;
+    const line = speakable(current.text).toLowerCase();
+    const words = said.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+    if (!words.length) return true;
+    return words.filter((w) => line.includes(w)).length / words.length >= 0.7;
+  };
+
+  const flush = () => {
+    const said = `${finalText} ${interim}`.trim();
+    finalText = "";
+    interim = "";
+    speaking = false;
+    if (said) h.onUtterance(said);
+  };
+
+  const start = () => {
+    const r = (rec = new Ctor());
+    r.lang = navigator.language || "en-US";
+    r.interimResults = true;
+    r.continuous = true;
+    r.onresult = (e) => {
+      interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        if (res.isFinal) finalText += ` ${res[0].transcript}`;
+        else interim += res[0].transcript;
+      }
+      const said = `${finalText} ${interim}`.trim();
+      if (!said) return;
+      if (!speaking) {
+        // While a seat is talking, only a real cut-in counts: a stop word, or
+        // two or more words that aren't the seat's own voice coming back.
+        if (current && !CUT_WORDS.test(said) && (said.split(/\s+/).length < 2 || isEcho(said))) {
+          finalText = "";
+          interim = "";
+          return;
+        }
+        speaking = true;
+        h.onBargeIn();
+      }
+      h.onHeard(said);
+      clearTimeout(timer);
+      timer = setTimeout(flush, 1400);
+    };
+    r.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        active = false;
+        h.onError("Sphere isn't allowed to use the microphone. Allow it in the browser's site settings.");
+      }
+    };
+    // Browsers end recognition after a while; keep the table listening.
+    r.onend = () => {
+      if (active) setTimeout(() => active && start(), 250);
+    };
+    r.start();
+  };
+  start();
+  return {
+    stop() {
+      active = false;
+      clearTimeout(timer);
+      rec?.stop();
+    },
+  };
 }

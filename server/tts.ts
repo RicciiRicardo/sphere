@@ -15,16 +15,42 @@ export function ttsInfo() {
   return { enabled: ttsAvailable(), model: workingModel ?? PREFERRED_MODEL };
 }
 
-// Voices both speech models offer, so a seat keeps its voice if the model
-// falls back. Seats not listed get one picked from the rest by their id.
+// Each seat must be easy to tell apart by ear: three women's and three men's
+// voices, alternating around the table, with different pace and manner.
+// All are offered by both speech models, so a seat keeps its voice if the
+// model falls back. Seats not listed get one of the rest, picked by their id.
 const VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"];
-const SEAT_VOICES: Record<string, { voice: string; style: string }> = {
-  muse: { voice: "coral", style: "Warm, composed and decisive, like a trusted chief of staff giving a briefing." },
-  claude: { voice: "sage", style: "Thoughtful and measured, like a strategist thinking out loud." },
-  perplexity: { voice: "echo", style: "Clear and precise, like a researcher reporting findings." },
-  grok: { voice: "ash", style: "Energetic and quick, like someone sharing breaking news." },
-  chatgpt: { voice: "alloy", style: "Friendly and conversational, like a colleague brainstorming." },
-  gemini: { voice: "shimmer", style: "Calm and analytical, like an analyst walking through the numbers." },
+const SEAT_VOICES: Record<string, { voice: string; speed: number; style: string }> = {
+  muse: {
+    voice: "coral",
+    speed: 1.0,
+    style: "A warm, composed woman's voice, decisive and reassuring, like a trusted chief of staff giving a briefing.",
+  },
+  claude: {
+    voice: "onyx",
+    speed: 0.95,
+    style: "A deep, measured man's voice, unhurried and thoughtful, like a senior strategist.",
+  },
+  perplexity: {
+    voice: "nova",
+    speed: 1.08,
+    style: "A bright, crisp woman's voice, precise and matter-of-fact, like a researcher reporting findings.",
+  },
+  grok: {
+    voice: "ash",
+    speed: 1.15,
+    style: "An energetic, fast-talking man's voice with a bit of edge, like someone sharing breaking news.",
+  },
+  chatgpt: {
+    voice: "fable",
+    speed: 1.0,
+    style: "A friendly, expressive man's voice with a British accent, playful and conversational.",
+  },
+  gemini: {
+    voice: "sage",
+    speed: 0.92,
+    style: "A calm, low, even woman's voice, careful and analytical, like an analyst walking through numbers.",
+  },
 };
 
 function voiceFor(seatId: string) {
@@ -34,16 +60,17 @@ function voiceFor(seatId: string) {
   const free = VOICES.filter((v) => !taken.has(v));
   let hash = 0;
   for (const ch of seatId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  return { voice: free[hash % free.length], style: "Natural and conversational." };
+  return { voice: free[hash % free.length], speed: 1.0, style: "Natural and conversational." };
 }
 
 async function synthesize(model: string, text: string, seatId: string): Promise<Buffer> {
-  const { voice, style } = voiceFor(seatId);
+  const { voice, speed, style } = voiceFor(seatId);
   const response = await openaiClient("openai").audio.speech.create({
     model,
     voice,
     input: text,
     response_format: "mp3",
+    speed,
     // Only the newer model takes speaking-style instructions.
     ...(model === FALLBACK_MODEL ? {} : { instructions: style }),
   });
