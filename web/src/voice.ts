@@ -34,7 +34,7 @@ export interface Listener {
   stop(): void;
 }
 
-// Listens until the speaker pauses (or stop() is called). onText receives the
+// Listens until stop() is called (the second tap on the mic). onText receives the
 // running transcript; onDone receives the final text, which may be empty.
 export function listen(onText: (text: string) => void, onDone: (text: string) => void, onError: (msg: string) => void): Listener {
   const Ctor = recognitionCtor();
@@ -45,10 +45,12 @@ export function listen(onText: (text: string) => void, onDone: (text: string) =>
   const rec = new Ctor();
   rec.lang = navigator.language || "en-US";
   rec.interimResults = true;
-  rec.continuous = false;
+  // Keep listening through pauses; Ricardo taps the mic again to send.
+  rec.continuous = true;
   let finalText = "";
+  let interim = "";
   rec.onresult = (e) => {
-    let interim = "";
+    interim = "";
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const r = e.results[i];
       if (r.isFinal) finalText += r[0].transcript;
@@ -59,7 +61,8 @@ export function listen(onText: (text: string) => void, onDone: (text: string) =>
   rec.onerror = (e) => {
     if (e.error !== "no-speech" && e.error !== "aborted") onError(`Microphone error: ${e.error}`);
   };
-  rec.onend = () => onDone(finalText.trim());
+  // Words still unconfirmed when the mic stops are kept, not dropped.
+  rec.onend = () => onDone(`${finalText} ${interim}`.trim());
   rec.start();
   return { stop: () => rec.stop() };
 }
