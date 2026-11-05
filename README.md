@@ -48,6 +48,10 @@ Tap **Inbox review**, or say "review my inbox" or "what emails am I missing?". S
 
 Mily and Claude get the list (and only they do, under the rules below). They sort it by company (Go Global, MI Group, Purpusly, Berris Group, Maggie Pam), lead with what could bring revenue or has a deadline, and draft the top three replies as cards.
 
+## Sign-in and timeout
+
+Sphere signs you out after 30 minutes without activity and 12 hours after sign-in at the latest (`SPHERE_IDLE_MINUTES`, `SPHERE_SESSION_HOURS`). Taps, typing, speaking and the team talking all count as activity, so a live conversation isn't cut off. On timeout the mic and voices stop and the screen clears. **Sign out** is in the top bar; **Sign out everywhere** in Connections ends the session on every device.
+
 ## Email rules
 
 Ricardo's inbox is confidential, so Sphere enforces these rules in code:

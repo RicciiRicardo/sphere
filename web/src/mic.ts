@@ -1,3 +1,5 @@
+import { noteActivity } from "./api";
+
 // Ricardo's voice, recorded in the browser and transcribed on the server.
 // The mic is opened with echo cancellation, the same processing video calls
 // use, so the team's voices coming out of the speakers are filtered out
@@ -60,6 +62,8 @@ const PHANTOM = /^(thanks?( you)?( (so much|for watching))?|you|bye|okay|\.+)[.!
 
 export async function transcribe(blob: Blob): Promise<string> {
   if (blob.size < 1000) return "";
+  // He spoke: that's activity, even with no tap.
+  noteActivity();
   const r = await fetch("/api/transcribe", {
     method: "POST",
     headers: { "Content-Type": blob.type.split(";")[0] || "audio/webm" },
