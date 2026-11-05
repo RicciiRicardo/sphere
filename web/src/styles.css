@@ -567,6 +567,19 @@ button.danger-solid {
 }
 
 /* Phone: one column; team and memory open over the conversation */
+@media (min-width: 901px) {
+  .app.memory-hidden {
+    grid-template-columns: 260px minmax(0, 1fr);
+    grid-template-areas:
+      "top top"
+      "team thread"
+      "team composer";
+  }
+  .app.memory-hidden .memory {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
   .app {
     grid-template-columns: minmax(0, 1fr);
