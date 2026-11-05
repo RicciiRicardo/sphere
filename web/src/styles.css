@@ -694,3 +694,8 @@ a.button-link {
   font-size: 13px;
   color: var(--text);
 }
+
+.timing {
+  font-size: 12px;
+  margin-top: 4px;
+}

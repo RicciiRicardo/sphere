@@ -18,6 +18,7 @@ import {
   type TeamEvent,
   type TurnMode,
   type Interruption,
+  type TurnTiming,
   type MailReview,
   type NoisySender,
 } from "./api";
@@ -39,7 +40,9 @@ import {
   skipSpeaker,
   speak,
   stopSpeaking,
+  streamSpeech,
   type Listener,
+  type StreamedSpeech,
   type SpeakingState,
 } from "./voice";
 import { canRecord, liveMic, recordOnce } from "./mic";
@@ -52,6 +55,9 @@ interface Turn {
   bids: Bid[];
   winner?: { seatId: string; text: string };
   final?: { seatId: string; text: string };
+  // The closing reply while it's still being written.
+  streaming?: { seatId: string; text: string };
+  timing?: TurnTiming;
   notices: string[];
   thinking: string[];
   live: boolean;
@@ -164,18 +170,39 @@ function applyEvent(turn: Turn, e: TeamEvent): Turn {
         thinking: turn.thinking.filter((id) => id !== e.seatId),
         replies: [...turn.replies, { seatId: e.seatId, error: e.error }],
       };
+    case "partial": {
+      const sofar = turn.streaming?.seatId === e.seatId ? turn.streaming.text : "";
+      return { ...turn, thinking: turn.thinking.filter((id) => id !== e.seatId), streaming: { seatId: e.seatId, text: sofar + e.text } };
+    }
     case "final": {
       // A direct answer arrives as both "seat" and "final"; show it once.
       const replies = turn.routing?.direct ? turn.replies.filter((r) => r.seatId !== e.seatId) : turn.replies;
-      return { ...turn, replies, thinking: turn.thinking.filter((id) => id !== e.seatId), final: { seatId: e.seatId, text: e.text } };
+      return {
+        ...turn,
+        replies,
+        thinking: turn.thinking.filter((id) => id !== e.seatId),
+        streaming: undefined,
+        final: { seatId: e.seatId, text: e.text },
+      };
     }
     case "notice":
       return { ...turn, notices: [...turn.notices, e.text] };
     case "done":
-      return { ...turn, live: false, thinking: [] };
+      return { ...turn, live: false, thinking: [], streaming: undefined, timing: e.timing };
     default:
       return turn;
   }
+}
+
+// When the chair brings teammates in, it says so out loud straight away, so
+// there's no silence while they work.
+function handOff(e: Extract<TeamEvent, { type: "routing" }>, seats: Seat[]) {
+  if (e.direct || (e.mode && e.mode !== "auto") || !e.seats.length) return;
+  const chair = seats.find((s) => s.is_chair);
+  const names = e.seats.map((id) => seats.find((s) => s.id === id)?.name).filter((n): n is string => Boolean(n));
+  if (!chair || !names.length) return;
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  enqueueSpeech(`Let me check with ${list}.`, chair.id);
 }
 
 // Who the app reads aloud: every seat as it speaks, only the chair's answer, or nobody.
@@ -222,6 +249,9 @@ export function App() {
   const [speaking, setSpeaking] = useState<SpeakingState>({ seatId: null, queued: 0, blocked: false });
   // The turn in flight, so cutting in can stop it.
   const turnAbort = useRef<AbortController | null>(null);
+  // The roster, for the chair's spoken hand-off while a turn streams in.
+  const seatsRef = useRef<Seat[]>([]);
+  seatsRef.current = state?.seats ?? [];
   // Live table: the mic stays open and Ricardo can talk over the team.
   const [liveOn, setLiveOn] = useState(false);
   const liveListener = useRef<Listener | null>(null);
@@ -292,6 +322,8 @@ export function App() {
         { id: placeholderId, userText: clean, replies: [], bids: [], notices: [], thinking: [], live: true },
       ]);
       let currentId = placeholderId;
+      // The closing reply being read aloud while it's written.
+      let streamed: { seatId: string; speech?: StreamedSpeech } | undefined;
       try {
         await sendTurn(
           clean,
@@ -311,7 +343,16 @@ export function App() {
             setState((s) => (s ? { ...s, memory: [...e.added, ...s.memory] } : s));
             return;
           }
-          if (e.type === "final" && voiceMode !== "off") enqueueSpeech(e.text, e.seatId);
+          if (e.type === "routing" && voiceMode !== "off") handOff(e, seatsRef.current);
+          if (e.type === "partial" && voiceMode !== "off") {
+            if (streamed?.seatId !== e.seatId) streamed = { seatId: e.seatId, speech: streamSpeech(e.seatId) };
+            streamed.speech?.add(e.text);
+          }
+          if (e.type === "final" && voiceMode !== "off") {
+            const spoken = streamed?.seatId === e.seatId && streamed.speech?.end();
+            streamed = undefined;
+            if (!spoken) enqueueSpeech(e.text, e.seatId);
+          }
           if (e.type === "seat" && voiceMode === "all") enqueueSpeech(e.text, e.seatId);
           setTurns((ts) => ts.map((t) => (t.id === currentId ? applyEvent(t, e) : t)));
           },
@@ -949,6 +990,17 @@ function TurnView({
           {name(id)} is thinking…
         </div>
       ))}
+      {!turn.final && turn.streaming && (
+        <div className="final" style={{ borderColor: color(turn.streaming.seatId) }}>
+          <div className="final-head">
+            <span className="dot pulse" style={{ background: color(turn.streaming.seatId) }} />
+            {name(turn.streaming.seatId)}
+            {seatById[turn.streaming.seatId]?.is_chair && <span className="badge">Chair</span>}
+          </div>
+          {/* Email drafts get their own cards once the reply is done. */}
+          <div className="body">{turn.streaming.text.split("[[DRAFT")[0]}</div>
+        </div>
+      )}
       {turn.final && (
         <div className="final" style={{ borderColor: color(turn.final.seatId) }}>
           <div className="final-head">
@@ -963,6 +1015,12 @@ function TurnView({
             </button>
             {rating(turn.final.seatId)}
           </div>
+        </div>
+      )}
+      {turn.timing && (
+        <div className="muted timing">
+          {turn.timing.firstWordsMs !== undefined && `Reply began after ${(turn.timing.firstWordsMs / 1000).toFixed(1)}s · `}
+          Done in {(turn.timing.totalMs / 1000).toFixed(1)}s
         </div>
       )}
       {turn.review && <ReviewCard review={turn.review} busy={busy} onAsk={onAsk} />}

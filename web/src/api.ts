@@ -140,13 +140,20 @@ export type TeamEvent =
   | { type: "thinking"; seatId: string }
   | { type: "seat"; seatId: string; text: string; round?: number }
   | { type: "seat_error"; seatId: string; error: string }
+  | { type: "partial"; seatId: string; text: string }
   | { type: "final"; seatId: string; text: string }
   | { type: "notice"; text: string }
   | { type: "memory"; added: MemoryItem[] }
   | { type: "draft"; draft: EmailDraft }
   | { type: "private"; seats: string[] }
   | { type: "review"; review: MailReview }
-  | { type: "done" };
+  | { type: "done"; timing?: TurnTiming };
+
+// How long Ricardo waited: until the reply's first words, and for all of it.
+export interface TurnTiming {
+  firstWordsMs?: number;
+  totalMs: number;
+}
 
 // Why the server asked for the password again: no session, too long without
 // activity, or past the session's maximum length.
