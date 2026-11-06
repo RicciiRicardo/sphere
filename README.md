@@ -48,6 +48,12 @@ Tap **Inbox review**, or say "review my inbox" or "what emails am I missing?". S
 
 Mily and Claude get the list (and only they do, under the rules below). They sort it by company (Go Global, MI Group, Purpusly, Berris Group, Maggie Pam), lead with what could bring revenue or has a deadline, and draft the top three replies as cards.
 
+## Chat history from other AI accounts
+
+In the Memory panel, **Bring in chat history** takes the export file you download from ChatGPT (Settings → Data controls → Export data), Claude (Settings → Privacy → Export data) or Gemini (Google Takeout, My Activity → Gemini Apps only). The file is read on your device; only the conversations' text is sent to Sphere, never the images or attachments. Mily reads the conversations in the background, a batch at a time (roughly half an hour per thousand chats), and adds the durable facts to the team memory, each labelled with the chat it came from. Each conversation's text is deleted once it's been read, and conversations already brought in are skipped, so a newer export only adds the new ones. A restart part-way through picks up where it left off.
+
+Who sees what is decided per memory item. The memory is shared so every seat works from the same picture, so business context (people, companies, projects, plans, decisions, how you like to work) goes to the whole team. Money figures and terms, investor and fundraising specifics, contract talks, matters about named people and your personal life are locked 🔒 to the seats allowed to read email. When one fact has both, it's split into a general item for the team and a locked item with the specifics. Personal financial, banking, loan and card details, passwords, ID numbers, health and legal-case details are never kept. Lock or Unlock any item to change it.
+
 ## Sign-in and timeout
 
 Sphere signs you out after 30 minutes without activity and 12 hours after sign-in at the latest (`SPHERE_IDLE_MINUTES`, `SPHERE_SESSION_HOURS`). Taps, typing, speaking and the team talking all count as activity, so a live conversation isn't cut off. On timeout the mic and voices stop and the screen clears. **Sign out** is in the top bar; **Sign out everywhere** in Connections ends the session on every device.

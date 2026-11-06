@@ -4,6 +4,7 @@ import path from "node:path";
 import { db, migrate } from "./db.js";
 import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
 import { addSeat, listFeedback, listSeats, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
+import { addChats, finishImport, IMPORT_SOURCES, listImports, processImports, startImport, type ImportSource } from "./imports.js";
 import { addMemory, backfillPrivate, deleteMemory, setMemoryPrivate, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
 import { runTurn, type Interruption, type TeamEvent, type TurnMode } from "./team.js";
 import { editDraft, getDraft, listDrafts, setDraftStatus } from "./drafts.js";
@@ -26,7 +27,9 @@ if (PROD && (!PASSWORD || !process.env.SESSION_SECRET)) {
 }
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+// Chat-history uploads come in larger batches and have their own limit.
+const smallJson = express.json({ limit: "1mb" });
+app.use((req, res, next) => (/^\/api\/imports\/\d+\/chats$/.test(req.path) ? next() : smallJson(req, res, next)));
 
 // Single-user login: a signed cookie proves the password was entered.
 const COOKIE = "sphere_session";
@@ -464,6 +467,40 @@ app.delete("/api/memory/:id", async (req, res) => {
   res.json({ memory: await listMemory() });
 });
 
+app.get("/api/memory", async (_req, res) => {
+  res.json({ memory: await listMemory() });
+});
+
+// Chat history from Ricardo's other AI accounts: the app reads the export
+// file on his device and sends the conversations in batches.
+app.get("/api/imports", async (_req, res) => {
+  res.json({ imports: await listImports() });
+});
+
+app.post("/api/imports", async (req, res) => {
+  const source = req.body?.source as ImportSource;
+  if (!IMPORT_SOURCES.includes(source)) {
+    res.status(400).json({ error: "Unknown source." });
+    return;
+  }
+  res.json({ id: await startImport(source, String(req.body?.filename ?? "export")) });
+});
+
+app.post("/api/imports/:id/chats", express.json({ limit: "8mb" }), async (req, res) => {
+  const source = req.body?.source as ImportSource;
+  const chats = req.body?.chats;
+  if (!IMPORT_SOURCES.includes(source) || !Array.isArray(chats)) {
+    res.status(400).json({ error: "Send the source and a list of chats." });
+    return;
+  }
+  res.json({ added: await addChats(Number(req.params.id), source, chats) });
+});
+
+app.post("/api/imports/:id/finish", async (req, res) => {
+  await finishImport(Number(req.params.id));
+  res.json({ imports: await listImports() });
+});
+
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
   res.status(500).json({ error: err instanceof Error ? err.message : "Server error" });
@@ -474,6 +511,8 @@ async function main() {
   sessionEpoch = Number(await getSetting("session_epoch")) || 0;
   await seedSeats();
   await backfillPrivate();
+  // Picks up a chat import that a restart interrupted.
+  void processImports();
 
   if (PROD) {
     const dir = path.resolve("dist/public");

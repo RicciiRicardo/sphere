@@ -135,5 +135,31 @@ export async function migrate() {
       action TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    -- Chat history brought in from Ricardo's other AI accounts (see imports.ts).
+    -- A conversation's text is cleared once it has been read into memory.
+    CREATE TABLE IF NOT EXISTS imports (
+      id SERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'uploading',
+      added_team INTEGER NOT NULL DEFAULT 0,
+      added_private INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS imported_chats (
+      id SERIAL PRIMARY KEY,
+      import_id INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      ext_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      started_at TIMESTAMPTZ,
+      body TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      items INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (source, ext_id)
+    );
   `);
 }
