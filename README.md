@@ -54,9 +54,15 @@ In the Memory panel, **Bring in chat history** takes the export file you downloa
 
 Who sees what is decided per memory item. The memory is shared so every seat works from the same picture, so business context (people, companies, projects, plans, decisions, how you like to work) goes to the whole team. Money figures and terms, investor and fundraising specifics, contract talks, matters about named people and your personal life are locked 🔒 to the seats allowed to read email. When one fact has both, it's split into a general item for the team and a locked item with the specifics. Personal financial, banking, loan and card details, passwords, ID numbers, health and legal-case details are never kept. Lock or Unlock any item to change it.
 
+## Sphere inside ChatGPT and Claude
+
+Sphere is also a connector (an MCP server at `/mcp`) you can add to Claude (Settings → Connectors → Add custom connector) and to ChatGPT (Developer mode, under Settings → Apps & Connectors → Advanced settings). The address to paste is shown in the Memory panel under **Use Sphere inside ChatGPT and Claude**. Connecting opens Sphere's own approval page, which asks for your Sphere password unless you're already signed in; the app then gets a token that lasts an hour and renews itself for up to 60 days of use.
+
+It gives the app two tools. **send_to_sphere** takes a conversation (or the app's summary of it) when you say "send this to Sphere"; Mily reads it into the team memory by the same rules as imported history. **search_sphere_memory** lets the app look up the team's shared memory; items locked 🔒 to the email seats are never returned, and the connector can't reach email or calendar. Connected apps are listed in the same place with a **Disconnect** button, and **Sign out everywhere** disconnects them all. Set `PUBLIC_URL` if Sphere is served from an address other than the one requests arrive on.
+
 ## Sign-in and timeout
 
-Sphere signs you out after 30 minutes without activity and 12 hours after sign-in at the latest (`SPHERE_IDLE_MINUTES`, `SPHERE_SESSION_HOURS`). Taps, typing, speaking and the team talking all count as activity, so a live conversation isn't cut off. On timeout the mic and voices stop and the screen clears. **Sign out** is in the top bar; **Sign out everywhere** in Connections ends the session on every device.
+Sphere signs you out after 30 minutes without activity and 12 hours after sign-in at the latest (`SPHERE_IDLE_MINUTES`, `SPHERE_SESSION_HOURS`). Taps, typing, speaking and the team talking all count as activity, so a live conversation isn't cut off. On timeout the mic and voices stop and the screen clears. **Sign out** is in the top bar; **Sign out everywhere** in Connections ends the session on every device and disconnects apps connected to Sphere.
 
 ## Email rules
 

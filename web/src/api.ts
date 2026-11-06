@@ -230,12 +230,23 @@ export const api = {
   addImportChats: (id: number, source: ImportSource, chats: ImportedChat[]) =>
     call<{ added: number }>(`/api/imports/${id}/chats`, { method: "POST", body: JSON.stringify({ source, chats }) }),
   finishImport: (id: number) => call<{ imports: ImportStatus[] }>(`/api/imports/${id}/finish`, { method: "POST" }),
+  connector: () => call<{ url: string; apps: ConnectedApp[] }>("/api/connector"),
+  disconnectApp: (id: string) => call<{ apps: ConnectedApp[] }>(`/api/connector/apps/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
+
+// An app (ChatGPT, Claude) connected to Sphere as a connector.
+export interface ConnectedApp {
+  id: string;
+  name: string;
+  source: ImportSource | "app";
+  connected_at: string;
+  last_used: string | null;
+}
 
 // A chat-history import and how far the team has got reading it.
 export interface ImportStatus {
   id: number;
-  source: ImportSource;
+  source: ImportSource | "app";
   filename: string;
   status: "uploading" | "working" | "done";
   created_at: string;

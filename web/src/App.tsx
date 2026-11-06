@@ -8,6 +8,7 @@ import {
   type SignedOutReason,
   type AppState,
   type Bid,
+  type ConnectedApp,
   type Connections,
   type EmailAccessEntry,
   type EmailDraft,
@@ -757,6 +758,7 @@ export function App() {
           }}
         />
         <ImportBox onMemory={(memory) => setState((s) => (s ? { ...s, memory } : s))} />
+        <ConnectorBox />
         <MemoryPanel
           memory={state.memory}
           kinds={state.memoryKinds}
@@ -1344,7 +1346,9 @@ function DraftCard({ draft, mailReady, onDrafts }: { draft: EmailDraft; mailRead
 }
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
-const SOURCE_LABEL: Record<string, string> = { chatgpt: "ChatGPT", claude: "Claude", gemini: "Gemini" };
+const SOURCE_LABEL: Record<string, string> = { chatgpt: "ChatGPT", claude: "Claude", gemini: "Gemini", app: "AI app" };
+// Conversations sent from inside a connected app are filed under this name.
+const SENT_FILENAME = "(sent from the app)";
 
 // Chat history from Ricardo's other AI accounts. The export file is read on
 // this device; only the conversations' text goes to Sphere, where Mily reads
@@ -1452,7 +1456,8 @@ function ImportBox({ onMemory }: { onMemory: (m: MemoryItem[]) => void }) {
       {err && <p className="error">{err}</p>}
       {imports.filter((i) => i.chats > 0 || i.status !== "done").map((i) => (
         <p key={i.id} className="muted import-line">
-          <b>{SOURCE_LABEL[i.source] ?? i.source}</b> · {plural(i.chats, "new conversation")} ·{" "}
+          <b>{SOURCE_LABEL[i.source] ?? i.source}</b> ·{" "}
+          {i.filename === SENT_FILENAME ? `${plural(i.chats, "conversation")} sent from the app` : plural(i.chats, "new conversation")} ·{" "}
           {i.status === "uploading"
             ? "upload didn't finish"
             : i.status === "working"
@@ -1462,6 +1467,73 @@ function ImportBox({ onMemory }: { onMemory: (m: MemoryItem[]) => void }) {
           {i.failed > 0 && ` · ${i.failed} couldn't be read`}
         </p>
       ))}
+    </div>
+  );
+}
+
+// Sphere as a connector inside ChatGPT and Claude: from a chat there, "send
+// this to Sphere" reads it into the team memory, and the app can look up the
+// team's shared memory.
+function ConnectorBox() {
+  const [info, setInfo] = useState<{ url: string; apps: ConnectedApp[] } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    api.connector().then(setInfo, (e) => setErr(e instanceof Error ? e.message : String(e)));
+  }, []);
+  if (!info) return err ? <p className="error">{err}</p> : null;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(info.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setErr("Couldn't copy. Press and hold the address to copy it.");
+    }
+  };
+  const disconnect = async (app: ConnectedApp) => {
+    if (!confirm(`Disconnect ${app.name}? It won't be able to send to Sphere or read its memory until you connect it again.`)) return;
+    setInfo({ ...info, apps: (await api.disconnectApp(app.id)).apps });
+  };
+  return (
+    <div className="import-box">
+      <h2>Use Sphere inside ChatGPT and Claude</h2>
+      <p className="hint">
+        Add Sphere as a connector, then say “send this to Sphere” in any chat there. Mily reads it into the team memory by the same
+        rules as imported history. The app can also look up what the team knows, but never items locked 🔒 to the email seats, and
+        never your email or calendar.
+      </p>
+      <div className="row connector-url">
+        <code>{info.url}</code>
+        <button className="ghost small" onClick={copy}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <details>
+        <summary>How to add it</summary>
+        <ul className="hint">
+          <li>
+            <b>Claude:</b> Settings → Connectors → Add custom connector. Name it Sphere and paste the address above. Tap Connect and
+            approve it with your Sphere password.
+          </li>
+          <li>
+            <b>ChatGPT:</b> Settings → Apps &amp; Connectors → Advanced settings → turn on Developer mode. Then Create, name it Sphere,
+            paste the address above, choose OAuth and approve it with your Sphere password. In a chat, pick Sphere from the + menu
+            (Developer mode) when you want to use it.
+          </li>
+        </ul>
+      </details>
+      {info.apps.map((a) => (
+        <p key={a.id} className="muted import-line">
+          <span className="dot ok" /> <b>{a.name}</b> · connected{" "}
+          {new Date(a.connected_at).toLocaleDateString([], { dateStyle: "medium" })}
+          {a.last_used && ` · last used ${new Date(a.last_used).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`}{" "}
+          <button className="ghost small danger" onClick={() => disconnect(a).catch((e) => setErr(String(e)))}>
+            Disconnect
+          </button>
+        </p>
+      ))}
+      {err && <p className="error">{err}</p>}
     </div>
   );
 }
