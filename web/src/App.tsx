@@ -18,6 +18,7 @@ import {
   type TeamEvent,
   type TurnMode,
   type Interruption,
+  type ImportStatus,
   type TurnTiming,
   type MailReview,
   type NoisySender,
@@ -46,6 +47,7 @@ import {
   type SpeakingState,
 } from "./voice";
 import { canRecord, liveMic, recordOnce } from "./mic";
+import { batches, readExport } from "./importers";
 
 interface Turn {
   id: string;
@@ -754,6 +756,7 @@ export function App() {
             if (confirm("Sign out of Sphere on every device, including this one?")) signOut("none", true);
           }}
         />
+        <ImportBox onMemory={(memory) => setState((s) => (s ? { ...s, memory } : s))} />
         <MemoryPanel
           memory={state.memory}
           kinds={state.memoryKinds}
@@ -1340,6 +1343,129 @@ function DraftCard({ draft, mailReady, onDrafts }: { draft: EmailDraft; mailRead
   );
 }
 
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+const SOURCE_LABEL: Record<string, string> = { chatgpt: "ChatGPT", claude: "Claude", gemini: "Gemini" };
+
+// Chat history from Ricardo's other AI accounts. The export file is read on
+// this device; only the conversations' text goes to Sphere, where Mily reads
+// them in the background and adds what matters to the team memory.
+function ImportBox({ onMemory }: { onMemory: (m: MemoryItem[]) => void }) {
+  const [imports, setImports] = useState<ImportStatus[]>([]);
+  const [step, setStep] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const working = imports.some((i) => i.status === "working");
+  const lastAdded = useRef(-1);
+  const onMemoryRef = useRef(onMemory);
+  onMemoryRef.current = onMemory;
+
+  const refresh = useCallback(async () => {
+    const { imports } = await api.imports();
+    setImports(imports);
+    // New memory from the import shows up as it's added.
+    const added = imports.reduce((n, i) => n + i.added_team + i.added_private, 0);
+    if (lastAdded.current >= 0 && added !== lastAdded.current) onMemoryRef.current((await api.memory()).memory);
+    lastAdded.current = added;
+  }, []);
+
+  useEffect(() => {
+    refresh().catch(() => undefined);
+  }, [refresh]);
+  useEffect(() => {
+    if (!working) return;
+    const t = setInterval(() => refresh().catch(() => undefined), 5000);
+    return () => clearInterval(t);
+  }, [working, refresh]);
+
+  const pick = async (file: File) => {
+    setErr("");
+    setBusy(true);
+    try {
+      setStep(`Reading ${file.name}…`);
+      const { source, chats } = await readExport(file);
+      if (!chats.length) throw new Error("No conversations with anything you wrote were found in that file.");
+      const { id } = await api.startImport(source, file.name);
+      const parts = batches(chats);
+      let fresh = 0;
+      for (const [i, part] of parts.entries()) {
+        setStep(`Sending ${plural(chats.length, "conversation")} from ${SOURCE_LABEL[source]}… ${Math.round((i / parts.length) * 100)}%`);
+        fresh += (await api.addImportChats(id, source, part)).added;
+      }
+      setImports((await api.finishImport(id)).imports);
+      setStep(
+        fresh
+          ? `Sent ${plural(fresh, "new conversation")}. Mily is reading them now; you can keep using Sphere.`
+          : `All ${plural(chats.length, "conversation")} in that file were already brought in.`,
+      );
+    } catch (e) {
+      setStep("");
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      if (input.current) input.current.value = "";
+    }
+  };
+
+  return (
+    <div className="import-box">
+      <h2>Bring in chat history</h2>
+      <p className="hint">
+        Download your history from ChatGPT, Claude or Gemini and pick the file here. Mily reads every conversation and adds what
+        matters to the team memory. Chats already brought in are skipped, so a newer export only adds what's new.
+      </p>
+      <details>
+        <summary>How to download it</summary>
+        <ul className="hint">
+          <li>
+            <b>ChatGPT:</b> Settings → Data controls → Export data. A download link arrives by email; save the .zip.
+          </li>
+          <li>
+            <b>Claude:</b> Settings → Privacy → Export data. A download link arrives by email; save the .zip.
+          </li>
+          <li>
+            <b>Gemini:</b> takeout.google.com → Deselect all → tick My Activity → under “All activity data included”, keep only Gemini
+            Apps → export. Save the .zip.
+          </li>
+        </ul>
+      </details>
+      <details>
+        <summary>Who sees what</summary>
+        <p className="hint">
+          Business context (people, companies, projects, plans, decisions, how you like to work) goes to the whole team, so every
+          seat works from the same picture. Money figures and terms, investors, contract talks, matters about named people and your
+          personal life are locked 🔒 to the seats allowed to read your email, like email. Bank, card and loan details, passwords,
+          ID numbers, health and legal-case details are never kept. Tap Lock or Unlock on any item to change it.
+        </p>
+      </details>
+      <input
+        ref={input}
+        type="file"
+        accept=".zip,.json,.html,application/zip,application/json,text/html"
+        style={{ display: "none" }}
+        onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])}
+      />
+      <button className="small" disabled={busy} onClick={() => input.current?.click()}>
+        Choose export file…
+      </button>
+      {step && <p className="muted">{step}</p>}
+      {err && <p className="error">{err}</p>}
+      {imports.filter((i) => i.chats > 0 || i.status !== "done").map((i) => (
+        <p key={i.id} className="muted import-line">
+          <b>{SOURCE_LABEL[i.source] ?? i.source}</b> · {plural(i.chats, "new conversation")} ·{" "}
+          {i.status === "uploading"
+            ? "upload didn't finish"
+            : i.status === "working"
+              ? `read ${i.read.toLocaleString()} so far`
+              : "done"}
+          {i.status !== "uploading" && ` · added ${i.added_team + i.added_private} (${i.added_team} team, ${i.added_private} 🔒)`}
+          {i.failed > 0 && ` · ${i.failed} couldn't be read`}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function MemoryPanel({ memory, kinds, onChange }: { memory: MemoryItem[]; kinds: string[]; onChange: (m: MemoryItem[]) => void }) {
   const [kind, setKind] = useState("note");
   const [text, setText] = useState("");
@@ -1405,7 +1531,7 @@ function MemoryPanel({ memory, kinds, onChange }: { memory: MemoryItem[]; kinds:
               ) : (
                 <div key={m.id} className="memory-item">
                   <p>
-                    {m.private && <span title="From your email: only seats allowed to read email see this">🔒 </span>}
+                    {m.private && <span title="Private: only seats allowed to read your email see this">🔒 </span>}
                     {m.content}
                   </p>
                   <div className="row">

@@ -1,3 +1,4 @@
+import type { ImportedChat, ImportSource } from "./importers";
 export type Provider = "anthropic" | "openai" | "xai" | "meta" | "perplexity" | "google";
 
 export interface Seat {
@@ -222,7 +223,28 @@ export const api = {
   setMemoryPrivate: (id: number, isPrivate: boolean) =>
     call<{ memory: MemoryItem[] }>(`/api/memory/${id}/private`, { method: "POST", body: JSON.stringify({ private: isPrivate }) }),
   deleteMemory: (id: number) => call<{ memory: MemoryItem[] }>(`/api/memory/${id}`, { method: "DELETE" }),
+  memory: () => call<{ memory: MemoryItem[] }>("/api/memory"),
+  imports: () => call<{ imports: ImportStatus[] }>("/api/imports"),
+  startImport: (source: ImportSource, filename: string) =>
+    call<{ id: number }>("/api/imports", { method: "POST", body: JSON.stringify({ source, filename }) }),
+  addImportChats: (id: number, source: ImportSource, chats: ImportedChat[]) =>
+    call<{ added: number }>(`/api/imports/${id}/chats`, { method: "POST", body: JSON.stringify({ source, chats }) }),
+  finishImport: (id: number) => call<{ imports: ImportStatus[] }>(`/api/imports/${id}/finish`, { method: "POST" }),
 };
+
+// A chat-history import and how far the team has got reading it.
+export interface ImportStatus {
+  id: number;
+  source: ImportSource;
+  filename: string;
+  status: "uploading" | "working" | "done";
+  created_at: string;
+  chats: number;
+  read: number;
+  failed: number;
+  added_team: number;
+  added_private: number;
+}
 
 // Live table: Ricardo cut in while this seat was speaking, having heard about this much.
 export interface Interruption {

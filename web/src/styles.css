@@ -699,3 +699,22 @@ a.button-link {
   font-size: 12px;
   margin-top: 4px;
 }
+
+.import-box {
+  margin-bottom: 18px;
+}
+.import-box details {
+  margin: 6px 0;
+}
+.import-box summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.import-box ul {
+  padding-left: 18px;
+  margin: 6px 0;
+}
+.import-line {
+  font-size: 12px;
+  margin: 4px 0;
+}
