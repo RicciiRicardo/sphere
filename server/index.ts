@@ -4,6 +4,7 @@ import path from "node:path";
 import { db, migrate } from "./db.js";
 import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
 import { addSeat, listFeedback, listSeats, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
+import { disconnectAllApps, disconnectApp, listConnectedApps, mountConnector } from "./connector.js";
 import { addChats, finishImport, IMPORT_SOURCES, listImports, processImports, startImport, type ImportSource } from "./imports.js";
 import { addMemory, backfillPrivate, deleteMemory, setMemoryPrivate, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
 import { runTurn, type Interruption, type TeamEvent, type TurnMode } from "./team.js";
@@ -85,13 +86,17 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+const checkPassword = (given: string) =>
+  PASSWORD.length > 0 && given.length === PASSWORD.length && timingSafeEqual(Buffer.from(given), Buffer.from(PASSWORD));
+
+// Sphere as a connector inside ChatGPT and Claude, with its own sign-in.
+mountConnector(app, {
+  signedIn: (req) => !PASSWORD || readSession(req).ok,
+  checkPassword: (given) => !PASSWORD || checkPassword(given),
+});
+
 app.post("/api/login", (req, res) => {
-  const given = String(req.body?.password ?? "");
-  const ok =
-    PASSWORD.length > 0 &&
-    given.length === PASSWORD.length &&
-    timingSafeEqual(Buffer.from(given), Buffer.from(PASSWORD));
-  if (!ok) {
+  if (!checkPassword(String(req.body?.password ?? ""))) {
     res.status(401).json({ error: "Wrong password." });
     return;
   }
@@ -126,6 +131,7 @@ app.get("/api/session", (_req, res) => {
 app.post("/api/logout-all", async (_req, res) => {
   sessionEpoch = Date.now();
   await setSetting("session_epoch", String(sessionEpoch));
+  await disconnectAllApps();
   clearSession(res);
   res.json({ ok: true });
 });
@@ -499,6 +505,17 @@ app.post("/api/imports/:id/chats", express.json({ limit: "8mb" }), async (req, r
 app.post("/api/imports/:id/finish", async (req, res) => {
   await finishImport(Number(req.params.id));
   res.json({ imports: await listImports() });
+});
+
+// The apps connected to Sphere as a connector (ChatGPT, Claude).
+app.get("/api/connector", async (req, res) => {
+  const url = `${(process.env.PUBLIC_URL ?? `${req.protocol}://${req.get("host")}`).replace(/\/$/, "")}/mcp`;
+  res.json({ url, apps: await listConnectedApps() });
+});
+
+app.delete("/api/connector/apps/:id", async (req, res) => {
+  await disconnectApp(req.params.id);
+  res.json({ apps: await listConnectedApps() });
 });
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

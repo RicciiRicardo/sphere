@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "./db.js";
 import { engineJSON } from "./engine.js";
@@ -14,7 +15,12 @@ import { isMock } from "./providers.js";
 
 export const IMPORT_SOURCES = ["chatgpt", "claude", "gemini"] as const;
 export type ImportSource = (typeof IMPORT_SOURCES)[number];
-const SOURCE_NAMES: Record<ImportSource, string> = { chatgpt: "ChatGPT", claude: "Claude", gemini: "Gemini" };
+// Conversations can also be sent one at a time from inside ChatGPT, Claude or
+// another AI app connected to Sphere (see connector.ts).
+export type ChatSource = ImportSource | "app";
+const SOURCE_NAMES: Record<ChatSource, string> = { chatgpt: "ChatGPT", claude: "Claude", gemini: "Gemini", app: "AI app" };
+// The import that conversations sent from an app are filed under, one per app.
+export const SENT_FILENAME = "(sent from the app)";
 
 export interface ImportedChat {
   id: string;
@@ -25,7 +31,7 @@ export interface ImportedChat {
 
 export interface ImportStatus {
   id: number;
-  source: ImportSource;
+  source: ChatSource;
   filename: string;
   status: "uploading" | "working" | "done";
   created_at: string;
@@ -73,6 +79,21 @@ export async function addChats(importId: number, source: ImportSource, chats: Im
   return added;
 }
 
+// One conversation sent from inside a connected app ("send this to Sphere").
+// It's read the same way as an imported one, so the same rules decide who sees what.
+export async function receiveSent(source: ChatSource, title: string, text: string) {
+  const found = await db.query<{ id: number }>("SELECT id FROM imports WHERE source = $1 AND filename = $2", [source, SENT_FILENAME]);
+  const importId =
+    found.rows[0]?.id ??
+    (await db.query<{ id: number }>("INSERT INTO imports (source, filename) VALUES ($1, $2) RETURNING id", [source, SENT_FILENAME])).rows[0].id;
+  await db.query(
+    `INSERT INTO imported_chats (import_id, source, ext_id, title, started_at, body) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+    [importId, source, `sent-${randomUUID()}`, title.trim().slice(0, 200) || "Untitled", trimChat(text.trim())],
+  );
+  await db.query("UPDATE imports SET status = 'working', updated_at = NOW() WHERE id = $1", [importId]);
+  void processImports();
+}
+
 export async function finishImport(importId: number) {
   await db.query("UPDATE imports SET status = 'working', updated_at = NOW() WHERE id = $1 AND status = 'uploading'", [importId]);
   void processImports();
@@ -112,6 +133,7 @@ From them, extract only durable facts worth remembering: people and organization
 - These conversations may be old. When a fact is tied to a time (a plan, a deadline, a status), say when, e.g. "As of March 2025, ...". Skip things that were clearly one-off.
 - Skip coding help, homework-style questions, general knowledge, small talk, and anything already in the known memory.
 - Write each item as one self-contained sentence that makes sense on its own. Most conversations yield nothing; return an empty list when nothing qualifies.
+- A chat marked "sent by Ricardo" was sent to the team by Ricardo himself from inside that app, often as a summary the assistant wrote at his request. Its account of what Ricardo said, decided or prefers counts as his.
 - "chat" is the number of the conversation the item came from.
 
 AUDIENCE: who on the team may see each item. The team can only help with what it knows, so share by default.
@@ -120,15 +142,17 @@ AUDIENCE: who on the team may see each item. The team can only help with what it
 - When a fact has a sensitive detail, split it into two items: the general fact for "team", the specifics as "private". For example, team: "Go Global is raising a SAFE round from angel investors." private: "Go Global's SAFE round terms: ..."
 - Never record at all: personal financial, banking, loan, credit or card details, account numbers, passwords or keys, government ID numbers, medical or health details, or legal-case details.`;
 
-function chatHeader(n: number, c: { source: ImportSource; title: string; started_at: string | null }) {
+function chatHeader(n: number, c: { source: ChatSource; ext_id: string; title: string; started_at: string | null }) {
   const when = c.started_at ? new Date(c.started_at).toISOString().slice(0, 10) : "date unknown";
-  return `=== CHAT ${n}: "${c.title}" (${SOURCE_NAMES[c.source]}, ${when}) ===`;
+  const sent = c.ext_id.startsWith("sent-") ? ", sent by Ricardo" : "";
+  return `=== CHAT ${n}: "${c.title}" (${SOURCE_NAMES[c.source]}, ${when}${sent}) ===`;
 }
 
 interface PendingChat {
   id: number;
   import_id: number;
-  source: ImportSource;
+  source: ChatSource;
+  ext_id: string;
   title: string;
   started_at: string | null;
   body: string;
@@ -145,7 +169,7 @@ export async function processImports() {
   try {
     for (;;) {
       const { rows } = await db.query<PendingChat>(
-        `SELECT c.id, c.import_id, c.source, c.title, c.started_at, c.body, c.attempts
+        `SELECT c.id, c.import_id, c.source, c.ext_id, c.title, c.started_at, c.body, c.attempts
          FROM imported_chats c JOIN imports i ON i.id = c.import_id
          WHERE c.status = 'pending' AND i.status = 'working'
          ORDER BY c.import_id, c.started_at NULLS LAST, c.id LIMIT 40`,
@@ -203,7 +227,8 @@ async function readBatch(batch: PendingChat[]) {
     seen.add(content.toLowerCase());
     const isPrivate = item.audience === "private";
     const when = chat.started_at ? `, ${new Date(chat.started_at).toISOString().slice(0, 10)}` : "";
-    await addMemory(item.kind, content, `${SOURCE_NAMES[chat.source]} chat "${chat.title.slice(0, 60)}"${when}`, isPrivate);
+    const from = chat.ext_id.startsWith("sent-") ? `sent from ${SOURCE_NAMES[chat.source]}` : `${SOURCE_NAMES[chat.source]} chat`;
+    await addMemory(item.kind, content, `${from} "${chat.title.slice(0, 60)}"${when}`, isPrivate);
     counts.set(chat.id, (counts.get(chat.id) ?? 0) + 1);
     const tally = perImport.get(chat.import_id) ?? { team: 0, private: 0 };
     tally[isPrivate ? "private" : "team"]++;

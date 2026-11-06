@@ -161,5 +161,32 @@ export async function migrate() {
       items INTEGER NOT NULL DEFAULT 0,
       UNIQUE (source, ext_id)
     );
+
+    -- Apps (ChatGPT, Claude) connected to Sphere as a connector (see
+    -- connector.ts). Secrets, codes and tokens are stored only as hashes.
+    CREATE TABLE IF NOT EXISTS oauth_clients (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      redirect_uris TEXT NOT NULL,
+      secret_hash TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS oauth_codes (
+      code_hash TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      challenge TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      id SERIAL PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      access_hash TEXT NOT NULL UNIQUE,
+      refresh_hash TEXT NOT NULL UNIQUE,
+      access_expires TIMESTAMPTZ NOT NULL,
+      refresh_expires TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used TIMESTAMPTZ
+    );
   `);
 }

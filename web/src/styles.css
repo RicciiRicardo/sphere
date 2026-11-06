@@ -718,3 +718,14 @@ a.button-link {
   font-size: 12px;
   margin: 4px 0;
 }
+
+.connector-url {
+  align-items: center;
+  margin: 8px 0;
+}
+.connector-url code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
