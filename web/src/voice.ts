@@ -96,6 +96,11 @@ interface Line {
   // so it comes back in about a second and plays while the rest is made.
   // Undefined means use the browser's voice.
   segments?: Segment[];
+  // A reply still being written: more pieces may come (see streamSpeech).
+  open?: boolean;
+  // Called when a piece is added or the line closes, if the player is waiting.
+  wake?: () => void;
+  cancelled?: boolean;
 }
 
 interface Segment {
@@ -189,22 +194,29 @@ function fetchSegment(text: string, seatId: string): Segment {
   return { text, url, abort };
 }
 
-// The opening sentence or two (at least a few words, at most about 200
-// characters), then the rest. Short replies stay in one piece.
-function splitOpening(text: string): string[] {
-  if (text.length < 250) return [text];
+// The opening sentence or two (at least a few words), then pieces of a few
+// sentences each. All are requested at once, so the first plays within about
+// a second and each later one is ready before the one before it ends.
+const OPENING = 40;
+const PIECE = 350;
+function splitPieces(text: string): string[] {
   const sentences = text.match(/[^.!?\n]+[.!?]*\s*/g) ?? [text];
-  let head = "";
+  const out: string[] = [];
+  let buf = "";
   for (const sentence of sentences) {
-    if (head.length >= 40 || head.length + sentence.length > 200) break;
-    head += sentence;
+    buf += sentence;
+    if (buf.trim().length >= (out.length ? PIECE : OPENING)) {
+      out.push(buf.trim());
+      buf = "";
+    }
   }
-  if (!head || head.length >= text.length) return [text];
-  return [head.trim(), text.slice(head.length).trim()];
+  if (buf.trim()) out.push(buf.trim());
+  return out.length ? out : [text];
 }
 
 function discard(line: Line | null) {
   if (!line) return;
+  line.cancelled = true;
   for (const seg of line.segments ?? []) {
     seg.abort.abort();
     seg.url.then((url) => url && URL.revokeObjectURL(url));
@@ -288,7 +300,14 @@ function playNext() {
   // must not replay it).
   const playSegment = (i: number) => {
     if (gen !== generation) return;
-    if (i >= segments.length) return done();
+    if (i >= segments.length) {
+      // More of a reply still being written: wait for its next piece.
+      if (line.open) {
+        line.wake = () => playSegment(i);
+        return;
+      }
+      return done();
+    }
     segmentIndex = i;
     const rest = () => segments.slice(i).map((seg) => seg.text).join(" ");
     segments[i].url.then((url) => {
@@ -396,9 +415,80 @@ function browserSpeak(line: Line, done: () => void, text = speakable(line.text))
 export function enqueueSpeech(text: string, seatId: string) {
   if (!canSpeak() || !text.trim() || held) return;
   const line: Line = { text, seatId };
-  if (naturalVoices) line.segments = splitOpening(speakable(text)).map((t) => fetchSegment(t, seatId));
+  if (naturalVoices) line.segments = splitPieces(speakable(text)).map((t) => fetchSegment(t, seatId));
   queue.push(line);
   playNext();
+}
+
+export interface StreamedSpeech {
+  // More of the reply, as it arrives.
+  add(delta: string): void;
+  // The reply is complete. Returns false if nothing was ever spoken (all of
+  // it was an email draft, say), so the caller can read the final text instead.
+  end(): boolean;
+}
+
+// Where reading aloud stops: email drafts go to their own cards and sources
+// are a list of links.
+function speakableEnd(raw: string) {
+  const marks = [raw.indexOf("[[DRAFT"), raw.search(/\n\s*Sources?:/i)].filter((i) => i >= 0);
+  return marks.length ? Math.min(...marks) : raw.length;
+}
+
+// Reads a reply aloud while it's still being written: each finished sentence
+// or few goes to the speech service as soon as it's complete, so the first
+// words play a second or two after the reply starts instead of after it ends.
+// Only with natural voices; otherwise returns undefined and the caller reads
+// the finished reply.
+let stops = 0;
+export function streamSpeech(seatId: string): StreamedSpeech | undefined {
+  if (!canSpeak() || held || !naturalVoices) return undefined;
+  const stopsAtStart = stops;
+  let raw = "";
+  let used = 0;
+  let line: Line | undefined;
+  const alive = () => !line?.cancelled && stops === stopsAtStart && !held;
+  const push = (text: string) => {
+    const said = speakable(text);
+    if (!said) return;
+    if (!line) {
+      line = { text: said, seatId, segments: [], open: true };
+      queue.push(line);
+    } else line.text += ` ${said}`;
+    line.segments!.push(fetchSegment(said, seatId));
+    const wake = line.wake;
+    line.wake = undefined;
+    if (wake) wake();
+    else playNext();
+  };
+  return {
+    add(delta) {
+      if (!alive()) return;
+      raw += delta;
+      const ready = raw.slice(used, speakableEnd(raw));
+      // Up to the end of the last finished sentence.
+      let end = -1;
+      for (const m of ready.matchAll(/[.!?]["')\]]?\s+|\n+/g)) end = m.index + m[0].length;
+      if (end < 0) return;
+      const text = ready.slice(0, end);
+      if (text.trim().length < (line ? PIECE : OPENING)) return;
+      used += end;
+      push(text);
+    },
+    end() {
+      if (alive()) {
+        const rest = raw.slice(used, speakableEnd(raw));
+        used = raw.length;
+        if (rest.trim()) push(rest);
+      }
+      if (!line) return false;
+      line.open = false;
+      const wake = line.wake;
+      line.wake = undefined;
+      wake?.();
+      return true;
+    },
+  };
 }
 
 // Drops whatever is playing or queued and says this instead.
@@ -420,6 +510,7 @@ export function skipSpeaker() {
 
 export function stopSpeaking() {
   if (!canSpeak()) return;
+  stops++;
   generation++;
   discard(current);
   queue.splice(0).forEach(discard);

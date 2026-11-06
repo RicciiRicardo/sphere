@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "./db.js";
-import { complete } from "./providers.js";
+import { complete, completeStream } from "./providers.js";
 import { listSeats, setChair, trackRecords, type SeatView, type TrackRecord } from "./seats.js";
 import {
   extractMemory,
@@ -29,13 +29,20 @@ export type TeamEvent =
   | { type: "thinking"; seatId: string }
   | { type: "seat"; seatId: string; text: string; round?: number }
   | { type: "seat_error"; seatId: string; error: string }
+  | { type: "partial"; seatId: string; text: string }
   | { type: "final"; seatId: string; text: string }
   | { type: "notice"; text: string }
   | { type: "memory"; added: MemoryItem[] }
   | { type: "draft"; draft: EmailDraft }
   | { type: "private"; seats: string[] }
   | { type: "review"; review: MailReview }
-  | { type: "done" };
+  | { type: "done"; timing?: TurnTiming };
+
+// How long Ricardo waited: until the reply's first words, and for all of it.
+export interface TurnTiming {
+  firstWordsMs?: number;
+  totalMs: number;
+}
 
 type Emit = (event: TeamEvent) => void;
 
@@ -183,9 +190,16 @@ async function privateContext(
   if (!(await emailEnabled())) return { block: "", items: 0 };
   const parts: string[] = [];
   let items = 0;
-  if (calendarConfigured()) {
+  // The calendar, the inbox and picking search terms all start at once;
+  // their results are still added in this order.
+  const review = mailConfigured() && !briefing && isReviewRequest(text);
+  const calendar = calendarConfigured() ? upcomingEvents() : undefined;
+  const inboxRead = mailConfigured() && !review ? recentInbox() : undefined;
+  const terms = mailConfigured() && !briefing && !review ? searchTerms(text) : undefined;
+  for (const p of [calendar, inboxRead, terms]) p?.catch(() => undefined);
+  if (calendar) {
     try {
-      const events = await upcomingEvents();
+      const events = await calendar;
       items += events.length;
       parts.push(`RICARDO'S CALENDAR, NEXT 7 DAYS\n${formatEvents(events, TZ)}`);
     } catch (err) {
@@ -193,7 +207,6 @@ async function privateContext(
       emit({ type: "notice", text: `Couldn't read your calendar: ${err instanceof Error ? err.message : String(err)}` });
     }
   }
-  const review = mailConfigured() && !briefing && isReviewRequest(text);
   if (review) {
     try {
       emit({ type: "notice", text: "Reviewing the last 45 days of your inbox and Sent folder. This takes up to a minute." });
@@ -206,9 +219,9 @@ async function privateContext(
       console.error("inbox review failed", err);
       emit({ type: "notice", text: `Couldn't review your inbox: ${err instanceof Error ? err.message : String(err)}` });
     }
-  } else if (mailConfigured()) {
+  } else if (inboxRead) {
     try {
-      const inbox = await recentInbox();
+      const inbox = await inboxRead;
       items += inbox.length;
       parts.push(`RICARDO'S RECENT EMAIL (newest first)\n${formatInbox(inbox, TZ)}`);
     } catch (err) {
@@ -216,7 +229,7 @@ async function privateContext(
       emit({ type: "notice", text: `Couldn't read your email: ${err instanceof Error ? err.message : String(err)}` });
     }
   }
-  const search = mailConfigured() && !briefing && !review ? await searchTerms(text) : undefined;
+  const search = await terms;
   if (search) {
     try {
       const hits = await searchMailbox(search.terms, search.days);
@@ -260,6 +273,8 @@ interface TurnContext {
   privateBlock: string;
   privateItems: number;
   logged: Set<string>;
+  started: number;
+  firstWords?: number;
 }
 
 const stopped = (ctx: TurnContext) => Boolean(ctx.signal?.aborted);
@@ -296,7 +311,10 @@ async function askSeat(
   }
   emit({ type: "thinking", seatId: seat.id });
   try {
-    const reply = await complete({ provider: seat.provider, model: seat.model, system, prompt, speaker: seat.name });
+    const reply =
+      kind === "final"
+        ? await streamReply(ctx, seat, system, prompt)
+        : await complete({ provider: seat.provider, model: seat.model, system, prompt, speaker: seat.name });
     if (stopped(ctx)) return undefined;
     if (kind !== "bid" && kind !== "final") {
       await record(turnId, seat.id, kind, reply);
@@ -310,6 +328,31 @@ async function askSeat(
     await record(turnId, seat.id, "error", error);
     emit({ type: "seat_error", seatId: seat.id, error: `${seat.name} couldn't answer: ${error}` });
     return undefined;
+  }
+}
+
+// The reply Ricardo gets, sent on as it's written (in batches about a tenth
+// of a second apart) so the app can show it and start reading it aloud.
+async function streamReply(ctx: TurnContext, seat: SeatView, system: string, prompt: string): Promise<string> {
+  let pending = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    timer = undefined;
+    if (pending && !stopped(ctx)) ctx.emit({ type: "partial", seatId: seat.id, text: pending });
+    pending = "";
+  };
+  try {
+    return await completeStream(
+      { provider: seat.provider, model: seat.model, system, prompt, speaker: seat.name },
+      (delta) => {
+        ctx.firstWords ??= Date.now();
+        pending += delta;
+        timer ??= setTimeout(flush, 120);
+      },
+    );
+  } finally {
+    clearTimeout(timer);
+    flush();
   }
 }
 
@@ -341,13 +384,12 @@ async function chairCloses(ctx: TurnContext, instruction: string): Promise<strin
   if (stopped(ctx)) return "";
   ctx.emit({ type: "thinking", seatId: chair.id });
   try {
-    const text = await complete({
-      provider: chair.provider,
-      model: chair.model,
-      system: teamSystem(chair, ctx.seats, memFor(ctx, chair), undefined, true),
-      prompt: `${promptFor(ctx, chair)}\n\n${instruction}`,
-      speaker: chair.name,
-    });
+    const text = await streamReply(
+      ctx,
+      chair,
+      teamSystem(chair, ctx.seats, memFor(ctx, chair), undefined, true),
+      `${promptFor(ctx, chair)}\n\n${instruction}`,
+    );
     return await finalize(ctx, chair.id, text);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
@@ -371,6 +413,7 @@ export interface TurnOptions {
 }
 
 export async function runTurn(text: string, emit: Emit, requested: TurnMode = "auto", opts: TurnOptions = {}) {
+  const started = Date.now();
   const turnId = randomUUID();
   emit({ type: "turn", turnId });
   await record(turnId, "you", "user", text);
@@ -408,6 +451,9 @@ export async function runTurn(text: string, emit: Emit, requested: TurnMode = "a
             : "auto";
 
   const now = new Date().toLocaleString("en-US", { timeZone: TZ, dateStyle: "full", timeStyle: "short" });
+  // Who to ask doesn't depend on the inbox, so it's decided while that's read.
+  const routing = mode === "auto" && !directlyAddressed(text, seats).length ? route(text, seats, transcript) : undefined;
+  routing?.catch(() => undefined);
   const priv = await privateContext(turnId, text, mode === "briefing", emit);
   const ctx: TurnContext = {
     turnId,
@@ -423,6 +469,7 @@ export async function runTurn(text: string, emit: Emit, requested: TurnMode = "a
     privateItems: priv.items,
     logged: new Set(),
     signal: opts.signal,
+    started,
   };
 
   // A turn that reads Ricardo's email is worked only by seats allowed to.
@@ -441,25 +488,29 @@ export async function runTurn(text: string, emit: Emit, requested: TurnMode = "a
   let finalText = "";
   if (mode === "roundtable") finalText = await runRoundtable(ctx);
   else if (mode === "pitch") finalText = await runPitch(ctx);
-  else finalText = await runRouted(ctx, mode === "briefing", transcript);
+  else finalText = await runRouted(ctx, mode === "briefing", transcript, routing);
 
   if (opts.signal?.aborted) {
     await record(turnId, "system", "notice", "Ricardo cut in here; the rest of this turn wasn't heard.");
-  } else if (finalText) {
-    try {
-      const added = await extractMemory(
-        text,
-        finalText,
-        `${ctx.privateBlock ? "email conversation" : "conversation"}, ${new Date().toISOString().slice(0, 10)}`,
-        Boolean(ctx.privateBlock),
-      );
-      if (added.length) emit({ type: "memory", added });
-    } catch (err) {
-      console.error("memory extraction failed", err);
-    }
   }
   if (ctx.privateBlock) await markPrivate(turnId);
-  emit({ type: "done" });
+  const timing: TurnTiming = {
+    firstWordsMs: ctx.firstWords ? ctx.firstWords - started : undefined,
+    totalMs: Date.now() - started,
+  };
+  console.log(`turn ${turnId} (${mode}): first words ${timing.firstWordsMs ?? "-"}ms, total ${timing.totalMs}ms`);
+  emit({ type: "done", timing });
+
+  // Memory is updated after the turn ends, so Ricardo can speak again
+  // straight away; the app picks up new items with its next refresh.
+  if (finalText && !opts.signal?.aborted) {
+    extractMemory(
+      text,
+      finalText,
+      `${ctx.privateBlock ? "email conversation" : "conversation"}, ${new Date().toISOString().slice(0, 10)}`,
+      Boolean(ctx.privateBlock),
+    ).catch((err) => console.error("memory extraction failed", err));
+  }
 }
 
 async function markPrivate(turnId: string) {
@@ -472,7 +523,12 @@ async function announce(ctx: TurnContext, routing: { seats: string[]; reason: st
 }
 
 // Default mode: the coordinator picks seats, they answer, the chair merges.
-async function runRouted(ctx: TurnContext, briefing: boolean, transcript: string): Promise<string> {
+async function runRouted(
+  ctx: TurnContext,
+  briefing: boolean,
+  transcript: string,
+  early?: Promise<{ seats: string[]; reason: string }>,
+): Promise<string> {
   const { seats, text } = ctx;
   const addressed = briefing ? [] : directlyAddressed(text, seats);
   const direct = addressed.length > 0;
@@ -486,7 +542,9 @@ async function runRouted(ctx: TurnContext, briefing: boolean, transcript: string
     routed = addressed.map((s) => s.id);
     reason = `You addressed ${addressed.map((s) => s.name).join(" and ")} directly.`;
   } else {
-    ({ seats: routed, reason } = await route(text, seats, transcript));
+    // The early pick was made from the whole team; a private turn is worked
+    // only by email readers, so it's routed again among them.
+    ({ seats: routed, reason } = await (early && !ctx.privateBlock ? early : route(text, seats, transcript)));
   }
   await announce(ctx, { seats: routed, reason, direct, mode: briefing ? "briefing" : "auto" });
 
@@ -671,19 +729,18 @@ async function runPitch(ctx: TurnContext): Promise<string> {
   if (stopped(ctx)) return "";
   ctx.emit({ type: "thinking", seatId: winner.id });
   try {
-    const text = await complete({
-      provider: winner.provider,
-      model: winner.model,
-      system: teamSystem(
+    const text = await streamReply(
+      ctx,
+      winner,
+      teamSystem(
         winner,
         ctx.seats,
         memFor(ctx, winner),
         `You won the pitch for this task with this plan: ${best.plan}\nNow do the task for Ricardo, in full.`,
         true,
       ),
-      prompt: promptFor(ctx, winner),
-      speaker: winner.name,
-    });
+      promptFor(ctx, winner),
+    );
     return await finalize(ctx, winner.id, text);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);

@@ -110,6 +110,77 @@ export async function complete({ provider, model, system, prompt, speaker }: Com
   return response.choices[0]?.message?.content?.trim() ?? "";
 }
 
+// The same reply as complete(), handed over piece by piece as it's written,
+// so the app can show it and start reading it aloud before it's finished.
+// Providers or models that can't stream (Perplexity, which adds its sources
+// at the end, and Claude models using server-side fallback) give it in one
+// piece. If a stream fails before any text arrives, it's asked again without.
+export async function completeStream(args: CompleteArgs, onText: (delta: string) => void): Promise<string> {
+  const { provider, model, system, prompt } = args;
+  if (isMock()) {
+    const text = await complete(args);
+    for (const piece of text.match(/\S+\s*/g) ?? []) {
+      onText(piece);
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return text;
+  }
+  const whole = async () => {
+    const text = await complete(args);
+    onText(text);
+    return text;
+  };
+  if (provider === "perplexity" || (provider === "anthropic" && FALLBACK_MODELS.has(model))) return whole();
+
+  let text = "";
+  const add = (delta: string | undefined) => {
+    if (!delta) return;
+    text += delta;
+    onText(delta);
+  };
+  try {
+    if (provider === "anthropic") {
+      const stream = anthropicClient().messages.stream({
+        model,
+        max_tokens: 16000,
+        system,
+        output_config: { effort: "medium" },
+        messages: [{ role: "user", content: prompt }],
+      });
+      stream.on("text", add);
+      const message = await stream.finalMessage();
+      if (message.stop_reason === "refusal" && !text.trim()) add("(Claude declined to answer this one.)");
+    } else if (provider === "meta") {
+      const stream = await openaiClient("meta").responses.create({
+        model,
+        instructions: system,
+        input: prompt,
+        reasoning: { effort: "medium" },
+        stream: true,
+      });
+      for await (const event of stream) {
+        if (event.type === "response.output_text.delta") add(event.delta);
+      }
+    } else {
+      const stream = await openaiClient(provider).chat.completions.create({
+        model,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ],
+        stream: true,
+      });
+      for await (const chunk of stream) add(chunk.choices[0]?.delta?.content ?? undefined);
+    }
+  } catch (err) {
+    if (text) throw err;
+    console.error(`${provider} streaming failed, asking without streaming`, err);
+    return whole();
+  }
+  if (!text.trim()) return whole();
+  return text.trim();
+}
+
 // Meta's playground calls Muse through the Responses endpoint, and on our
 // account Chat Completions answers 404 "model not found" for the same model,
 // so Muse goes through Responses too.
