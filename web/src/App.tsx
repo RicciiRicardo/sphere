@@ -1497,7 +1497,7 @@ function MemoryPanel({ memory, kinds, onChange }: { memory: MemoryItem[]; kinds:
             </option>
           ))}
         </select>
-        <textarea rows={2} value={text} placeholder="e.g. Investor call with Aubyn on Friday" onChange={(e) => setText(e.target.value)} />
+        <textarea rows={2} value={text} placeholder="e.g. Investor call with Morgan on Friday" onChange={(e) => setText(e.target.value)} />
         <button onClick={add} disabled={!text.trim()}>
           Add
         </button>

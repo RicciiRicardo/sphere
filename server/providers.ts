@@ -239,7 +239,7 @@ function mockReply(speaker: string, prompt: string, system: string): Promise<str
   const said = prompt.split("RICARDO NOW SAYS\n")[1]?.split("\n")[0] ?? ask;
   if (system.includes("EMAIL DRAFTS") && /\b(draft|reply|email|write to)\b/i.test(said)) {
     return wait(
-      `I've drafted a reply to Vanessa with the landed-cost numbers. (${speaker}, mock)\n\n[[DRAFT]]\nTo: Vanessa Brown <vanessa@example.com>\nSubject: Re: King Tamer shipment to Kingston\nIn-Reply-To: <mock-3@example.com>\n---\nHi Vanessa,\n\nLanded cost for 200 units comes to about $X per unit including duty and freight. I'll confirm the final figure by Thursday.\n\nBest,\nRicardo\n[[/DRAFT]]`,
+      `I've drafted a reply to Dana with the landed-cost numbers. (${speaker}, mock)\n\n[[DRAFT]]\nTo: Dana Reyes <dana@example.com>\nSubject: Re: Salon dryer shipment to Kingston\nIn-Reply-To: <mock-3@example.com>\n---\nHi Dana,\n\nLanded cost for 200 units comes to about $X per unit including duty and freight. I'll confirm the final figure by Thursday.\n\nBest,\nRicardo\n[[/DRAFT]]`,
     );
   }
   if (system.includes("round two")) {
