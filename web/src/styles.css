@@ -40,6 +40,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  /* A long link or address breaks onto the next line instead of widening the page. */
+  overflow-wrap: break-word;
 }
 
 button {
@@ -188,6 +190,8 @@ h3 {
 .app {
   height: 100%;
   display: grid;
+  /* Nothing pushes the page sideways on a phone. */
+  overflow-x: clip;
   grid-template-columns: 260px minmax(0, 1fr) 320px;
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
@@ -280,6 +284,7 @@ h3 {
 }
 
 .thread {
+  overflow-wrap: anywhere;
   grid-area: thread;
   overflow-y: auto;
   padding: 24px max(16px, calc((100% - 760px) / 2));
@@ -632,7 +637,8 @@ button.danger-solid {
   .memory {
     display: none;
     position: fixed;
-    top: 50px;
+    /* Opens just below the top bar, however many rows its buttons take. */
+    top: var(--topbar-height, 50px);
     bottom: 0;
     left: 0;
     right: 0;
