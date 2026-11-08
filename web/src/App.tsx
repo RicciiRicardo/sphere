@@ -265,6 +265,18 @@ export function App() {
   useEffect(() => setNaturalVoices(naturalVoices), [naturalVoices]);
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<"none" | "team" | "memory">("none");
+  // On a phone the top bar's buttons can wrap to a second row; the Team and
+  // Memory panels open just below it rather than over those buttons.
+  const topbar = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = topbar.current;
+    if (!el) return;
+    const update = () => document.documentElement.style.setProperty("--topbar-height", `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    update();
+    const watch = new ResizeObserver(update);
+    watch.observe(el);
+    return () => watch.disconnect();
+  });
   // On a wide screen the memory column can be hidden to keep the focus on the conversation.
   const [memoryHidden, setMemoryHidden] = useState(() => readPref("sphere.memoryHidden", false));
   const toggleMemory = () => {
@@ -615,17 +627,17 @@ export function App() {
 
   return (
     <div className={`app panel-${panel}${memoryHidden ? " memory-hidden" : ""}`}>
-      <header className="topbar">
+      <header className="topbar" ref={topbar}>
         <div className="brand">
           <div className={`orb ${busy ? "pulse" : ""}`} />
           <span className="wide-only">Sphere</span>
           {state.mock && <span className="badge warn">Mock</span>}
         </div>
         <div className="actions">
-          <button className="ghost mobile-only" onClick={() => setPanel(panel === "team" ? "none" : "team")}>
+          <button className={`ghost mobile-only ${panel === "team" ? "on" : ""}`} onClick={() => setPanel(panel === "team" ? "none" : "team")}>
             Team
           </button>
-          <button className="ghost mobile-only" onClick={() => setPanel(panel === "memory" ? "none" : "memory")}>
+          <button className={`ghost mobile-only ${panel === "memory" ? "on" : ""}`} onClick={() => setPanel(panel === "memory" ? "none" : "memory")}>
             Memory
           </button>
           <button className="ghost wide-only" onClick={toggleMemory} title="Show or hide the memory column">
