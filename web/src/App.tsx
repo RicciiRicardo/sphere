@@ -211,6 +211,7 @@ function handOff(e: Extract<TeamEvent, { type: "routing" }>, seats: Seat[]) {
 // Who the app reads aloud: every seat as it speaks, only the chair's answer, or nobody.
 type VoiceMode = "all" | "chair" | "off";
 const VOICE_LABEL: Record<VoiceMode, string> = { all: "Voice: everyone", chair: "Voice: chair", off: "Muted" };
+const VOICE_ICON: Record<VoiceMode, string> = { all: "🔊", chair: "🔉", off: "🔇" };
 const NEXT_VOICE: Record<VoiceMode, VoiceMode> = { all: "chair", chair: "off", off: "all" };
 
 function readVoiceMode(): VoiceMode {
@@ -265,6 +266,7 @@ export function App() {
   useEffect(() => setNaturalVoices(naturalVoices), [naturalVoices]);
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<"none" | "team" | "memory">("none");
+  const [menuOpen, setMenuOpen] = useState(false);
   // On a phone the top bar's buttons can wrap to a second row; the Team and
   // Memory panels open just below it rather than over those buttons.
   const topbar = useRef<HTMLElement>(null);
@@ -623,6 +625,21 @@ export function App() {
     return <div className="splash">{error ? <p className="error">{error}</p> : <div className="orb pulse" />}</div>;
   }
 
+  const reviewInbox = async () => {
+    // Email may still be switched off (for a demo, say): offer to turn it back on.
+    if (!state.connections.mail.enabled) {
+      if (!confirm("Email access is switched off, so the team can't read your inbox. Switch it on and run the review?")) return;
+      try {
+        const { enabled } = await api.setEmailEnabled(true);
+        setState((s) => (s ? { ...s, connections: { ...s.connections, mail: { ...s.connections.mail, enabled } } } : s));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+    }
+    send("Review my inbox: who's waiting on a reply from me, and where am I missing opportunities across my companies?");
+  };
+
   const chair = seats.find((s) => s.is_chair);
 
   return (
@@ -630,16 +647,10 @@ export function App() {
       <header className="topbar" ref={topbar}>
         <div className="brand">
           <div className={`orb ${busy ? "pulse" : ""}`} />
-          <span className="wide-only">Sphere</span>
+          <span>Sphere</span>
           {state.mock && <span className="badge warn">Mock</span>}
         </div>
         <div className="actions">
-          <button className={`ghost mobile-only ${panel === "team" ? "on" : ""}`} onClick={() => setPanel(panel === "team" ? "none" : "team")}>
-            Team
-          </button>
-          <button className={`ghost mobile-only ${panel === "memory" ? "on" : ""}`} onClick={() => setPanel(panel === "memory" ? "none" : "memory")}>
-            Memory
-          </button>
           <button className="ghost wide-only" onClick={toggleMemory} title="Show or hide the memory column">
             {memoryHidden ? "Show memory" : "Hide memory"}
           </button>
@@ -648,46 +659,71 @@ export function App() {
               className={`ghost ${voiceMode !== "off" ? "on" : ""}`}
               onClick={cycleVoice}
               title="Read aloud: every seat as it speaks, only the chair, or nobody"
+              aria-label={VOICE_LABEL[voiceMode]}
             >
-              {VOICE_LABEL[voiceMode]}
+              <span className="wide-only">{VOICE_LABEL[voiceMode]}</span>
+              <span className="mobile-only">{VOICE_ICON[voiceMode]}</span>
             </button>
           )}
           {state.connections.mail.configured && (
             <button
-              className="ghost"
+              className="ghost wide-only"
               disabled={busy}
               title="Who's waiting on a reply, by company, and which bulk senders to clean up"
-              onClick={async () => {
-                // Email may still be switched off (for a demo, say): offer to turn it back on.
-                if (!state.connections.mail.enabled) {
-                  if (!confirm("Email access is switched off, so the team can't read your inbox. Switch it on and run the review?")) return;
-                  try {
-                    const { enabled } = await api.setEmailEnabled(true);
-                    setState((s) => (s ? { ...s, connections: { ...s.connections, mail: { ...s.connections.mail, enabled } } } : s));
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : String(e));
-                    return;
-                  }
-                }
-                send("Review my inbox: who's waiting on a reply from me, and where am I missing opportunities across my companies?");
-              }}
+              onClick={reviewInbox}
             >
-              <span className="wide-only">Inbox review</span>
-              <span className="mobile-only">Inbox</span>
+              Inbox review
             </button>
           )}
           {idleMinutes > 0 && (
-            <button className="ghost" title="Sign out of Sphere on this device" onClick={() => signOut("none")}>
-              <span className="wide-only">Sign out</span>
-              <span className="mobile-only">Exit</span>
+            <button className="ghost wide-only" title="Sign out of Sphere on this device" onClick={() => signOut("none")}>
+              Sign out
             </button>
           )}
           <button disabled={busy} onClick={() => send("Good morning, team.", "briefing")}>
             <span className="wide-only">Morning briefing</span>
             <span className="mobile-only">Briefing</span>
           </button>
+          {/* On a phone everything else lives in one menu; with a panel open, it closes it. */}
+          <button
+            className="ghost mobile-only menu-button"
+            aria-label={panel !== "none" ? "Close" : "Menu"}
+            aria-expanded={menuOpen}
+            onClick={() => (panel !== "none" ? setPanel("none") : setMenuOpen(!menuOpen))}
+          >
+            {panel !== "none" ? "✕" : "☰"}
+          </button>
         </div>
       </header>
+      {menuOpen && (
+        <>
+          <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
+          <nav className="phone-menu">
+            {(
+              [
+                ["Team", "The seats, and who's on the team", () => setPanel("team")],
+                ["Memory", "What the team knows, connections and chat history", () => setPanel("memory")],
+                ...(state.connections.mail.configured ? [["Inbox review", "Who's waiting on a reply from you", reviewInbox] as const] : []),
+                ...(canSpeak() ? [[VOICE_LABEL[voiceMode], "Tap to change who reads aloud", cycleVoice, true] as const] : []),
+                ...(idleMinutes > 0 ? [["Sign out", "Of Sphere on this phone", () => signOut("none")] as const] : []),
+              ] as const
+            ).map(([label, hint, run, keepOpen]) => (
+              <button
+                key={hint}
+                className="phone-menu-item"
+                disabled={busy && label === "Inbox review"}
+                onClick={() => {
+                  if (!keepOpen) setMenuOpen(false);
+                  void run();
+                }}
+              >
+                <span>{label}</span>
+                <span className="muted">{hint}</span>
+              </button>
+            ))}
+          </nav>
+        </>
+      )}
 
       <aside className="team">
         <h2>The team</h2>
