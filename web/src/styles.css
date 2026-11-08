@@ -621,12 +621,18 @@ button.danger-solid {
   .topbar {
     padding: 8px 12px;
   }
-  /* Every action stays on screen: they wrap to a second row rather than
-     running off the edge of a phone. */
+  /* One row on a phone: voice, Briefing and a menu for the rest. */
   .actions {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    align-items: center;
     gap: 6px;
     min-width: 0;
+  }
+  .topbar .actions .menu-button {
+    width: 36px;
+    height: 32px;
+    padding: 0;
+    font-size: 17px;
   }
   .topbar .actions button {
     padding: 5px 9px;
@@ -734,4 +740,41 @@ a.button-link {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 12px;
+}
+
+/* The phone menu: opens under the top bar. */
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  background: rgba(0, 0, 0, 0.35);
+}
+.phone-menu {
+  position: fixed;
+  top: calc(var(--topbar-height, 50px) + 6px);
+  right: 8px;
+  left: 8px;
+  z-index: 20;
+  display: grid;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.phone-menu-item {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 12px 16px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  border-bottom: 1px solid var(--line);
+}
+.phone-menu-item:last-child {
+  border-bottom: 0;
+}
+.phone-menu-item .muted {
+  font-size: 13px;
 }
