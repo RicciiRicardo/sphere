@@ -453,6 +453,21 @@ export function mountConnector(app: Express, deps: ConnectorDeps) {
   const notAllowed = (_req: Request, res: Response) => {
     res.status(405).set("Allow", "POST").json({ error: "Method not allowed." });
   };
-  app.get("/mcp", notAllowed);
+  // Opened in a browser, the address explains itself instead of erroring.
+  app.get("/mcp", (req, res) => {
+    if (!req.accepts("html") || req.accepts(["text/event-stream", "html"]) === "text/event-stream") return notAllowed(req, res);
+    page(
+      res,
+      200,
+      `<h1>This is Sphere's connector address</h1>
+<p>It isn't a page to open. Copy this address and paste it into the app instead:</p>
+<p><b>${esc(`${base(req)}/mcp`)}</b></p>
+<ul>
+  <li><b>Claude:</b> Settings → Connectors → Add custom connector. Name it Sphere, paste the address and tap Connect.</li>
+  <li><b>ChatGPT:</b> Settings → Apps &amp; Connectors → Advanced settings → turn on Developer mode, then create a connector with this address.</li>
+</ul>
+<p>The app then opens Sphere's approval page, where you enter your Sphere password.</p>`,
+    );
+  });
   app.delete("/mcp", notAllowed);
 }
