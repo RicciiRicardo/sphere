@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { anthropicClient, isMock, isProviderReady, openaiClient } from "./providers.js";
+import { anthropicClient, currentModel, isMock, isProviderReady, openaiClient, withRepair } from "./providers.js";
 
 // The engine: the behind-the-scenes model that routes messages, judges Pitch
 // bids and keeps the shared memory. It runs on Meta's Muse Spark when the Meta
@@ -19,7 +19,7 @@ export function engineInfo() {
   const p = primary();
   return {
     provider: p,
-    model: p === "meta" ? MUSE_ENGINE_MODEL : CLAUDE_ENGINE_MODEL,
+    model: p === "meta" ? currentModel("meta", MUSE_ENGINE_MODEL) : CLAUDE_ENGINE_MODEL,
     label: p === "meta" ? "Muse Spark (Meta)" : "Claude Haiku (Anthropic)",
   };
 }
@@ -39,12 +39,14 @@ function parseJsonObject(text: string): unknown {
 
 async function viaMuse<T>(schema: z.ZodType<T>, system: string, user: string): Promise<T | undefined> {
   const jsonSchema = JSON.stringify(z.toJSONSchema(schema));
-  const response = await openaiClient("meta").responses.create({
-    model: MUSE_ENGINE_MODEL,
-    instructions: `${system}\n\nReply with only one JSON object, no prose and no code fence, matching this JSON Schema:\n${jsonSchema}`,
-    input: user,
-    reasoning: { effort: "low" },
-  });
+  const response = await withRepair("meta", MUSE_ENGINE_MODEL, (model) =>
+    openaiClient("meta").responses.create({
+      model,
+      instructions: `${system}\n\nReply with only one JSON object, no prose and no code fence, matching this JSON Schema:\n${jsonSchema}`,
+      input: user,
+      reasoning: { effort: "low" },
+    }),
+  );
   const parsed = schema.safeParse(parseJsonObject(response.output_text ?? ""));
   if (!parsed.success) {
     console.error("Muse engine reply didn't fit the schema", parsed.error.message.slice(0, 300));

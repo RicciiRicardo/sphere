@@ -1,5 +1,6 @@
 import { db } from "./db.js";
-import { isProviderReady, type Provider } from "./providers.js";
+import { isProviderReady, rememberReplacement, whenModelReplaced, type Provider } from "./providers.js";
+import { getSetting, setSetting } from "./settings.js";
 
 export interface Seat {
   id: string;
@@ -204,4 +205,24 @@ export async function removeSeat(id: string) {
   const { rows } = await db.query<{ is_chair: boolean }>("SELECT is_chair FROM seats WHERE id = $1", [id]);
   if (rows[0]?.is_chair) throw new Error("Move the chair to another seat before removing this one.");
   await db.query("DELETE FROM seats WHERE id = $1", [id]);
+}
+
+// Model swaps made by the auto-repair in providers.ts: seats on the old model
+// move to the new one, and the swap is saved so the engine (whose model comes
+// from the environment) keeps using it after a restart.
+const SWAPS_KEY = "model_replacements";
+
+export async function loadModelSwaps() {
+  const saved = JSON.parse((await getSetting(SWAPS_KEY)) ?? "[]") as [Provider, string, string][];
+  for (const [provider, from, to] of saved) rememberReplacement(provider, from, to);
+  whenModelReplaced((provider, from, to) => {
+    (async () => {
+      await db.query("UPDATE seats SET model = $3 WHERE provider = $1 AND model = $2", [provider, from, to]);
+      const list = (JSON.parse((await getSetting(SWAPS_KEY)) ?? "[]") as [Provider, string, string][]).map(
+        ([p, f, t]): [Provider, string, string] => [p, f, p === provider && t === from ? to : t],
+      );
+      list.push([provider, from, to]);
+      await setSetting(SWAPS_KEY, JSON.stringify(list));
+    })().catch((err) => console.error("couldn't save the model swap", err));
+  });
 }

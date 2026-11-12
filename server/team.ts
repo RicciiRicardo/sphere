@@ -279,6 +279,10 @@ interface TurnContext {
 
 const stopped = (ctx: TurnContext) => Boolean(ctx.signal?.aborted);
 
+// Tells Ricardo when a seat's model was swapped for one its key can use.
+const notice = (ctx: TurnContext, seat: SeatView) => (text: string) =>
+  ctx.emit({ type: "notice", text: `${seat.name}: ${text}` });
+
 // What a seat sees. Private memory, private conversation and this turn's inbox
 // go only to seats with email access, and each such read is logged.
 function memFor(ctx: TurnContext, seat: SeatView): string {
@@ -314,7 +318,7 @@ async function askSeat(
     const reply =
       kind === "final"
         ? await streamReply(ctx, seat, system, prompt)
-        : await complete({ provider: seat.provider, model: seat.model, system, prompt, speaker: seat.name });
+        : await complete({ provider: seat.provider, model: seat.model, system, prompt, speaker: seat.name, onNotice: notice(ctx, seat) });
     if (stopped(ctx)) return undefined;
     if (kind !== "bid" && kind !== "final") {
       await record(turnId, seat.id, kind, reply);
@@ -343,7 +347,7 @@ async function streamReply(ctx: TurnContext, seat: SeatView, system: string, pro
   };
   try {
     return await completeStream(
-      { provider: seat.provider, model: seat.model, system, prompt, speaker: seat.name },
+      { provider: seat.provider, model: seat.model, system, prompt, speaker: seat.name, onNotice: notice(ctx, seat) },
       (delta) => {
         ctx.firstWords ??= Date.now();
         pending += delta;
