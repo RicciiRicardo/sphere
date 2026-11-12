@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { db, migrate } from "./db.js";
 import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
-import { addSeat, listFeedback, listSeats, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
+import { addSeat, listFeedback, listSeats, loadModelSwaps, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
 import { disconnectAllApps, disconnectApp, listConnectedApps, mountConnector } from "./connector.js";
 import { addChats, finishImport, IMPORT_SOURCES, listImports, processImports, startImport, type ImportSource } from "./imports.js";
 import { addMemory, backfillPrivate, deleteMemory, setMemoryPrivate, listMemory, MEMORY_KINDS, updateMemory, type MemoryKind } from "./context.js";
@@ -527,6 +527,7 @@ async function main() {
   await migrate();
   sessionEpoch = Number(await getSetting("session_epoch")) || 0;
   await seedSeats();
+  await loadModelSwaps();
   await backfillPrivate();
   // Picks up a chat import that a restart interrupted.
   void processImports();

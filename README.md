@@ -105,4 +105,4 @@ Use **Test connections** in the app (top of the memory panel) to check both.
 | ChatGPT | OpenAI | `OPENAI_API_KEY` | `gpt-6.1-sol` |
 | Gemini (Analyst) | Google AI Studio | `GEMINI_API_KEY` | `gemini-4-argon` |
 
-Model IDs are editable per seat in the app, so a new model release doesn't need a code change. Without an Anthropic key, routing falls back to keyword matching and memory isn't filled in automatically.
+Model IDs are editable per seat in the app, so a new model release doesn't need a code change. If a provider says a seat's model doesn't exist (renamed, retired, or no longer on that key), Sphere repairs it on its own: it asks the key which models it can use, switches to the closest match (same family, newest version, skipping preview and mini variants), retries, updates the seat and tells you in the conversation. The same applies to the engine's Muse model. If nothing on the key is a sensible match, the error lists the models the key can use. Without an Anthropic key, routing falls back to keyword matching and memory isn't filled in automatically.
