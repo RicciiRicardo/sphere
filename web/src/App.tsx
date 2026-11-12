@@ -993,7 +993,7 @@ function TurnView({
                 key={`${r.seatId}-${i}`}
                 className={`reply ${r.error ? "failed" : ""}`}
                 style={{ borderColor: color(r.seatId) }}
-                open={roundtable && !r.error}
+                open={roundtable || Boolean(r.error)}
               >
                 <summary>
                   <span className="dot" style={{ background: color(r.seatId) }} />
