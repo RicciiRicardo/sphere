@@ -368,36 +368,54 @@ async function finalize(ctx: TurnContext, seatId: string, text: string): Promise
   return shown;
 }
 
-// The chair has the last word: it merges, summarizes or briefs.
+// The chair has the last word: it merges, summarizes or briefs. If the chair
+// can't answer (its provider is down, out of credit, or its model retired),
+// another connected seat closes instead, Claude first, so Ricardo still gets
+// a reply. In a private turn ctx.seats holds only email readers, so a stand-in
+// never sees what it shouldn't.
 async function chairCloses(ctx: TurnContext, instruction: string): Promise<string> {
   // In a private turn the chair may lack email access; another reader closes.
   const chair = ctx.seats.find((s) => s.is_chair) ?? (ctx.privateBlock ? ctx.seats.find((s) => s.ready) : undefined);
-  if (!chair || !chair.ready) {
-    ctx.emit({
-      type: "notice",
-      text: chair
-        ? `${chair.name} chairs the team but isn't connected yet, so there's no closing reply.`
-        : "No seat is set as chair, so there's no closing reply.",
-    });
+  if (!chair) {
+    ctx.emit({ type: "notice", text: "No seat is set as chair, so there's no closing reply." });
     return "";
   }
-  if (stopped(ctx)) return "";
-  ctx.emit({ type: "thinking", seatId: chair.id });
-  try {
-    const text = await streamReply(
-      ctx,
-      chair,
-      teamSystem(chair, ctx.seats, memFor(ctx, chair), undefined, true),
-      `${promptFor(ctx, chair)}\n\n${instruction}`,
-    );
-    return await finalize(ctx, chair.id, text);
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    console.error(`${chair.name} (chair) failed`, err);
-    await record(ctx.turnId, chair.id, "error", error);
-    ctx.emit({ type: "seat_error", seatId: chair.id, error: `${chair.name} couldn't close: ${error}` });
-    return "";
+  const standIns = ctx.seats
+    .filter((s) => s.id !== chair.id && s.enabled && s.ready)
+    .sort((a, b) => Number(b.provider === "anthropic") - Number(a.provider === "anthropic"));
+  const closers = [...(chair.ready ? [chair] : []), ...standIns];
+  if (!chair.ready && standIns.length) {
+    ctx.emit({ type: "notice", text: `${chair.name} chairs the team but isn't connected, so ${standIns[0].name} is closing instead.` });
   }
+  for (const [i, seat] of closers.entries()) {
+    if (stopped(ctx)) return "";
+    if (i > 0 && chair.ready) {
+      ctx.emit({ type: "notice", text: `${closers[i - 1].name} couldn't answer, so ${seat.name} is giving the reply instead.` });
+    }
+    const duty =
+      seat.id === chair.id
+        ? undefined
+        : `${chair.name} chairs the team but couldn't answer this time, so you stand in: you give Ricardo the team's single reply.`;
+    ctx.emit({ type: "thinking", seatId: seat.id });
+    try {
+      const text = await streamReply(
+        ctx,
+        seat,
+        teamSystem(seat, ctx.seats, memFor(ctx, seat), duty, true),
+        `${promptFor(ctx, seat)}\n\n${instruction}`,
+      );
+      if (!text.trim()) throw new Error("The reply came back empty.");
+      return await finalize(ctx, seat.id, text);
+    } catch (err) {
+      let error = err instanceof Error ? err.message : String(err);
+      if ((err as { status?: number }).status === 404) error += " Pick a model from the list in this seat's settings.";
+      console.error(`${seat.name} (closing) failed`, err);
+      await record(ctx.turnId, seat.id, "error", error);
+      ctx.emit({ type: "seat_error", seatId: seat.id, error: `${seat.name} couldn't close: ${error}` });
+    }
+  }
+  if (!closers.length) ctx.emit({ type: "notice", text: `${chair.name} chairs the team but isn't connected yet, so there's no closing reply.` });
+  return "";
 }
 
 // Live table: Ricardo cut in while a seat was speaking. heard is roughly what
