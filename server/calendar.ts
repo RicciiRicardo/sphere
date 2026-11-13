@@ -92,7 +92,7 @@ function mockEvents(): CalendarEvent[] {
   };
   return [
     { title: "Go Global team stand-up", start: at(0, 9), end: at(0, 10), allDay: false, location: "Zoom", calendar: "Work" },
-    { title: "Call with Vanessa: Jamaica distribution", start: at(0, 14), end: at(0, 15), allDay: false, location: "", calendar: "Work" },
-    { title: "Investor call with Aubyn", start: at(1, 10), end: at(1, 11), allDay: false, location: "Phone", calendar: "Work" },
+    { title: "Call with Dana: Jamaica distribution", start: at(0, 14), end: at(0, 15), allDay: false, location: "", calendar: "Work" },
+    { title: "Investor call with Morgan", start: at(1, 10), end: at(1, 11), allDay: false, location: "Phone", calendar: "Work" },
   ];
 }
