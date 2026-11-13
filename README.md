@@ -60,6 +60,10 @@ Sphere is also a connector (an MCP server at `/mcp`) you can add to Claude (Sett
 
 It gives the app two tools. **send_to_sphere** takes a conversation (or the app's summary of it) when you say "send this to Sphere"; Mily reads it into the team memory by the same rules as imported history. **search_sphere_memory** lets the app look up the team's shared memory; items locked 🔒 to the email seats are never returned, and the connector can't reach email or calendar. Connected apps are listed in the same place with a **Disconnect** button, and **Sign out everywhere** disconnects them all. Set `PUBLIC_URL` if Sphere is served from an address other than the one requests arrive on.
 
+## Install on your phone
+
+Sphere installs as an app with its own icon and opens full screen, without the browser bar. On iPhone: open the site in Safari, tap Share, then **Add to Home Screen**. On Android: open it in Chrome and tap **Install app** (or menu → Add to Home screen). The app always loads the latest version (nothing is cached), and shows a short notice when the phone is offline. The installed app keeps its own sign-in, so you sign in once inside it.
+
 ## Sign-in and timeout
 
 Sphere signs you out after 30 minutes without activity and 12 hours after sign-in at the latest (`SPHERE_IDLE_MINUTES`, `SPHERE_SESSION_HOURS`). Taps, typing, speaking and the team talking all count as activity, so a live conversation isn't cut off. On timeout the mic and voices stop and the screen clears. **Sign out** is in the top bar; **Sign out everywhere** in Connections ends the session on every device and disconnects apps connected to Sphere.
