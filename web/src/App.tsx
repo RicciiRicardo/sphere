@@ -23,6 +23,7 @@ import {
   type TurnTiming,
   type MailReview,
   type NoisySender,
+  type SeatTest,
 } from "./api";
 import {
   canListen,
@@ -1715,6 +1716,7 @@ function SeatEditor({
     email_access: seat?.email_access ?? false,
   });
   const [err, setErr] = useState("");
+  const [test, setTest] = useState<SeatTest | "running" | null>(null);
   const [models, setModels] = useState<{ list: string[]; note: string }>({ list: [], note: "" });
   useEffect(() => {
     let live = true;
@@ -1798,6 +1800,7 @@ function SeatEditor({
             May read your email (and private conversations and memory that came from it)
           </label>
         )}
+        {seat && test && <SeatTestResult seat={seat} test={test} />}
         {err && <p className="error">{err}</p>}
         <div className="row end">
           {seat && !seat.is_chair && (
@@ -1815,6 +1818,25 @@ function SeatEditor({
               Remove
             </button>
           )}
+          {seat && (
+            <button
+              className="ghost"
+              disabled={test === "running"}
+              onClick={async () => {
+                setTest("running");
+                try {
+                  const r = await api.testSeat(seat.id);
+                  setTest(r);
+                  if (r.model && r.model !== form.model) set("model", r.model);
+                } catch (e) {
+                  setTest(null);
+                  setErr(e instanceof Error ? e.message : String(e));
+                }
+              }}
+            >
+              {test === "running" ? "Testing…" : "Test"}
+            </button>
+          )}
           <span className="spacer" />
           <button className="ghost" onClick={onClose}>
             Cancel
@@ -1824,6 +1846,46 @@ function SeatEditor({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// What a seat test found, in plain words: whether the key lists models,
+// and whether a one-line test message got an answer.
+function SeatTestResult({ seat, test }: { seat: Seat; test: SeatTest | "running" }) {
+  if (test === "running") return <p className="muted">Checking {PROVIDER_LABELS[seat.provider]} and sending a test message…</p>;
+  if (!test.ready) return <p className="error">No {PROVIDER_LABELS[seat.provider]} API key on the server, so there's nothing to test.</p>;
+  const { list, call, notices = [] } = test;
+  return (
+    <div className="seat-test">
+      {list &&
+        (!list.ok ? (
+          <p className="error">Listing models failed ({list.status}).</p>
+        ) : list.count ? (
+          <p>
+            ✓ The key can use {list.count} model{list.count === 1 ? "" : "s"}: {list.models.slice(0, 8).join(", ")}
+            {list.count > 8 ? "…" : ""}
+          </p>
+        ) : (
+          <p className="error">The key is accepted, but {PROVIDER_LABELS[seat.provider]} lists no models for it.</p>
+        ))}
+      {list?.raw && (
+        <details>
+          <summary className="muted">{PROVIDER_LABELS[seat.provider]}'s exact answer</summary>
+          <pre>{list.raw}</pre>
+        </details>
+      )}
+      {notices.map((n) => (
+        <p key={n}>{n}</p>
+      ))}
+      {call &&
+        (call.ok ? (
+          <p>
+            ✓ Test message answered in {(call.ms / 1000).toFixed(1)}s on {test.model}: "{call.reply}"
+          </p>
+        ) : (
+          <p className="error">✗ Test message failed: {call.error}</p>
+        ))}
     </div>
   );
 }

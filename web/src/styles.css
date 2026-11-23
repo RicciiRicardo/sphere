@@ -778,3 +778,21 @@ a.button-link {
 .phone-menu-item .muted {
   font-size: 13px;
 }
+
+.seat-test {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+.seat-test p {
+  margin: 4px 0;
+}
+.seat-test pre {
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow: auto;
+  font-size: 0.85em;
+}

@@ -50,9 +50,36 @@ export async function listModels(provider: Provider): Promise<string[]> {
     return ids;
   }
   if (provider === "perplexity") return [...PERPLEXITY_EFFORTS];
-  const ids: string[] = [];
-  for await (const model of openaiClient(provider).models.list()) ids.push(model.id.replace(/^models\//, ""));
-  return ids.sort();
+  const check = await rawModelList(provider);
+  if (!check.ok) throw new Error(`${check.status} ${check.raw.slice(0, 300)}`);
+  return check.models;
+}
+
+// The provider's own answer to "which models can this key use", read
+// directly rather than through the SDK, so a list in an unexpected shape
+// (`data` or `models`, `id` or `name`) still comes through, and the raw
+// answer can be shown when something looks wrong.
+export async function rawModelList(provider: Exclude<Provider, "anthropic">) {
+  const cfg = OPENAI_COMPATIBLE[provider];
+  const base = (cfg.baseURL ?? "https://api.openai.com/v1").replace(/\/$/, "");
+  const res = await fetch(`${base}/models`, {
+    headers: { Authorization: `Bearer ${process.env[cfg.env] ?? ""}` },
+    signal: AbortSignal.timeout(20_000),
+  });
+  const raw = await res.text();
+  let models: string[] = [];
+  try {
+    const body = JSON.parse(raw) as { data?: unknown; models?: unknown };
+    const items = Array.isArray(body) ? body : Array.isArray(body.data) ? body.data : Array.isArray(body.models) ? body.models : [];
+    models = items
+      .map((m: unknown) => (typeof m === "string" ? m : ((m as { id?: string; name?: string }).id ?? (m as { name?: string }).name)))
+      .filter((m): m is string => typeof m === "string")
+      .map((m) => m.replace(/^models\//, ""))
+      .sort();
+  } catch {
+    /* not JSON: shown raw */
+  }
+  return { ok: res.ok, status: res.status, models, raw };
 }
 
 // Models that accept Anthropic's server-side refusal fallback.

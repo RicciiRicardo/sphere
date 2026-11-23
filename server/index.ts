@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { createHmac, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { db, migrate } from "./db.js";
-import { isMock, isProviderReady, listModels, PROVIDERS, type Provider } from "./providers.js";
+import { complete, isMock, isProviderReady, listModels, PROVIDERS, rawModelList, type Provider } from "./providers.js";
 import { addSeat, listFeedback, listSeats, loadModelSwaps, rateAnswer, removeSeat, seedSeats, setChair, updateSeat } from "./seats.js";
 import { disconnectAllApps, disconnectApp, listConnectedApps, mountConnector } from "./connector.js";
 import { addChats, finishImport, IMPORT_SOURCES, listImports, processImports, startImport, type ImportSource } from "./imports.js";
@@ -402,6 +402,60 @@ app.put("/api/seats/:id", async (req, res) => {
     email_access: typeof email_access === "boolean" ? email_access : undefined,
   });
   res.json({ seats: await listSeats() });
+});
+
+// Checks one seat end to end: which models its key can use (the provider's
+// raw answer, so an empty or odd list can be seen) and a one-line test
+// message on the seat's model. The test goes through the same auto-repair as
+// a real turn, so a missing model is swapped and the seat updated.
+app.post("/api/seats/:id/test", async (req, res) => {
+  const seat = (await listSeats()).find((s) => s.id === req.params.id);
+  if (!seat) {
+    res.status(404).json({ error: "No such seat." });
+    return;
+  }
+  if (!isProviderReady(seat.provider)) {
+    res.json({ ready: false, seats: await listSeats() });
+    return;
+  }
+  let list: { ok: boolean; status: number | string; count: number; models: string[]; raw?: string };
+  try {
+    if (isMock()) {
+      list = { ok: true, status: "mock", count: 1, models: [seat.model] };
+    } else if (seat.provider === "anthropic" || seat.provider === "perplexity") {
+      const models = await listModels(seat.provider);
+      list = { ok: true, status: 200, count: models.length, models: models.slice(0, 40) };
+    } else {
+      const r = await rawModelList(seat.provider);
+      list = {
+        ok: r.ok,
+        status: r.status,
+        count: r.models.length,
+        models: r.models.slice(0, 40),
+        raw: r.ok && r.models.length ? undefined : r.raw.slice(0, 1500),
+      };
+    }
+  } catch (err) {
+    list = { ok: false, status: "error", count: 0, models: [], raw: err instanceof Error ? err.message : String(err) };
+  }
+  const notices: string[] = [];
+  const started = Date.now();
+  let call: { ok: boolean; reply?: string; error?: string; ms: number };
+  try {
+    const reply = await complete({
+      provider: seat.provider,
+      model: seat.model,
+      system: "This is a connection test from Sphere.",
+      prompt: "Reply with just the word OK.",
+      speaker: seat.name,
+      onNotice: (t) => notices.push(t),
+    });
+    call = { ok: true, reply: reply.slice(0, 200), ms: Date.now() - started };
+  } catch (err) {
+    call = { ok: false, error: err instanceof Error ? err.message : String(err), ms: Date.now() - started };
+  }
+  const seats = await listSeats();
+  res.json({ ready: true, list, call, notices, model: seats.find((s) => s.id === seat.id)?.model ?? seat.model, seats });
 });
 
 app.post("/api/seats/:id/chair", async (req, res) => {
