@@ -189,6 +189,15 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+export interface SeatTest {
+  ready: boolean;
+  list?: { ok: boolean; status: number | string; count: number; models: string[]; raw?: string };
+  call?: { ok: boolean; reply?: string; error?: string; ms: number };
+  notices?: string[];
+  model?: string;
+  seats: Seat[];
+}
+
 export const api = {
   state: () => call<AppState>("/api/state"),
   login: (password: string) => call<{ ok: true }>("/api/login", { method: "POST", body: JSON.stringify({ password }) }),
@@ -197,6 +206,7 @@ export const api = {
   keepAlive: () => call<{ ok: true }>("/api/session"),
   updateSeat: (id: string, patch: Partial<Seat>) =>
     call<{ seats: Seat[] }>(`/api/seats/${id}`, { method: "PUT", body: JSON.stringify(patch) }),
+  testSeat: (id: string) => call<SeatTest>(`/api/seats/${id}/test`, { method: "POST" }),
   setChair: (id: string) => call<{ seats: Seat[] }>(`/api/seats/${id}/chair`, { method: "POST" }),
   addSeat: (seat: Pick<Seat, "name" | "title" | "provider" | "model" | "role_card">) =>
     call<{ seats: Seat[] }>("/api/seats", { method: "POST", body: JSON.stringify(seat) }),
